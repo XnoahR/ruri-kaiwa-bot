@@ -156,6 +156,15 @@ def save(cfg: dict, path: str | None = None) -> None:
     os.replace(tmp, p)
 
 
+def provider_chain(cfg: dict) -> list:
+    """Provider aktif dulu, sisanya jadi cadangan dengan urutan aslinya."""
+    provs = cfg["llm"]["providers"]
+    aktif = active_provider(cfg)
+    if aktif is None:
+        return []
+    return [aktif] + [p for p in provs if p is not aktif]
+
+
 def active_provider(cfg: dict) -> dict | None:
     provs = cfg["llm"]["providers"]
     if not provs:

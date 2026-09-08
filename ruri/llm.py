@@ -120,6 +120,49 @@ def split_reply(text: str) -> tuple:
     return spoken, (fix or None)
 
 
+class SemuaGagal(Exception):
+    """Semua provider sudah dicoba dan tidak ada yang menjawab."""
+
+    def __init__(self, kegagalan: list) -> None:
+        self.kegagalan = kegagalan
+        super().__init__("; ".join("%s: %s" % (n, e) for n, e in kegagalan))
+
+    @property
+    def kena_batas(self) -> bool:
+        return all(is_rate_limited(e) for _n, e in self.kegagalan) if self.kegagalan else False
+
+
+def is_rate_limited(exc) -> bool:
+    """Batas pemakaian, bukan kerusakan.
+
+    Penyedia menyebutnya dengan macam-macam nama -- 429, "rate limit",
+    "FreeUsageLimitError", "quota" -- jadi yang dicocokkan bentuk pesannya,
+    bukan tipe pengecualiannya.
+    """
+    teks = str(exc).lower()
+    return ("429" in teks or "rate limit" in teks or "ratelimit" in teks
+            or "freeusagelimit" in teks or "quota" in teks or "exceeded" in teks)
+
+
+def complete_any(cfg: dict, rantai: list, system: str, messages: list,
+                 max_tokens: int = 0) -> tuple:
+    """Coba provider satu per satu sampai ada yang menjawab.
+
+    -> (teks, provider yang dipakai). Melempar SemuaGagal kalau habis semua.
+
+    Provider gratis kena batas pemakaian pada jam-jam sibuk, dan satu giliran
+    yang hilang gara-gara itu terasa seperti bot yang rusak. Provider kedua
+    biasanya punya kuota yang sama sekali terpisah.
+    """
+    kegagalan: list = []
+    for provider in rantai:
+        try:
+            return complete(cfg, provider, system, messages, max_tokens), provider
+        except Exception as exc:
+            kegagalan.append((provider.get("name", "?"), exc))
+    raise SemuaGagal(kegagalan)
+
+
 def complete(cfg: dict, provider: dict, system: str, messages: list,
              max_tokens: int = 0) -> str:
     """Kumpulkan seluruh balasan. Streaming tidak berguna di sini -- kalimatnya

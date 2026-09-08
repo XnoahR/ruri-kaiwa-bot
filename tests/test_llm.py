@@ -75,3 +75,72 @@ class Prompt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatasPemakaian(unittest.TestCase):
+    """Provider gratis kena batas pada jam sibuk. Satu giliran yang hilang
+    gara-gara itu terasa seperti bot yang rusak."""
+
+    def test_mengenali_berbagai_bentuk_pesannya(self):
+        for teks in ("HTTP 429 from the API",
+                     '{"type":"FreeUsageLimitError"}',
+                     "Rate limit exceeded. Please try again later.",
+                     "You exceeded your current quota"):
+            with self.subTest(teks):
+                self.assertTrue(llm.is_rate_limited(teks))
+
+    def test_tidak_salah_menuduh_kegagalan_lain(self):
+        for teks in ("connection refused", "invalid api key", "500 server error"):
+            with self.subTest(teks):
+                self.assertFalse(llm.is_rate_limited(teks))
+
+
+class RantaiProvider(unittest.TestCase):
+    def setUp(self):
+        self.asli = llm.complete
+        self.dipanggil = []
+
+    def tearDown(self):
+        llm.complete = self.asli
+
+    def pasang(self, hasil):
+        """hasil: dict nama -> teks jawaban, atau Exception untuk gagal."""
+        def palsu(cfg, provider, system, messages, max_tokens=0):
+            nama = provider["name"]
+            self.dipanggil.append(nama)
+            keluar = hasil[nama]
+            if isinstance(keluar, Exception):
+                raise keluar
+            return keluar
+        llm.complete = palsu
+
+    RANTAI = [{"name": "A"}, {"name": "B"}]
+
+    def test_provider_kedua_menambal_yang_pertama(self):
+        self.pasang({"A": RuntimeError("HTTP 429"), "B": "<balas>はい</balas>"})
+        teks, dipakai = llm.complete_any({}, self.RANTAI, "sys", [])
+        self.assertEqual(dipakai["name"], "B")
+        self.assertEqual(self.dipanggil, ["A", "B"])
+        self.assertIn("はい", teks)
+
+    def test_yang_pertama_berhasil_tidak_menyentuh_cadangan(self):
+        self.pasang({"A": "ok", "B": RuntimeError("jangan dipanggil")})
+        _teks, dipakai = llm.complete_any({}, self.RANTAI, "sys", [])
+        self.assertEqual(dipakai["name"], "A")
+        self.assertEqual(self.dipanggil, ["A"])
+
+    def test_semua_gagal_melapor_sebabnya(self):
+        self.pasang({"A": RuntimeError("HTTP 429"),
+                     "B": RuntimeError("FreeUsageLimitError")})
+        with self.assertRaises(llm.SemuaGagal) as ctx:
+            llm.complete_any({}, self.RANTAI, "sys", [])
+        self.assertTrue(ctx.exception.kena_batas)
+        self.assertEqual(len(ctx.exception.kegagalan), 2)
+
+    def test_kegagalan_campuran_bukan_soal_batas(self):
+        """Kalau satu putus koneksi, pesannya jangan bilang 'kena batas'."""
+        self.pasang({"A": RuntimeError("HTTP 429"),
+                     "B": RuntimeError("connection refused")})
+        with self.assertRaises(llm.SemuaGagal) as ctx:
+            llm.complete_any({}, self.RANTAI, "sys", [])
+        self.assertFalse(ctx.exception.kena_batas)

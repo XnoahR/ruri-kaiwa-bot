@@ -156,6 +156,11 @@ class Kaiwa(commands.Cog):
 
         return conf.active_provider(self.cfg)
 
+    def rantai_provider(self) -> list:
+        from . import config as conf
+
+        return conf.provider_chain(self.cfg)
+
     # 瑠璃色, warna tradisional Jepang untuk lapis lazuli -- sesuai namanya.
     WARNA = 0x1E50A2
 
@@ -201,6 +206,25 @@ class Kaiwa(commands.Cog):
             # Kalau embed ditolak (izin kurang), lebih baik teks polos daripada
             # balasan yang hilang tanpa jejak.
             await self.say(key, kata)
+
+    async def _maaf(self, key: int, kalimat: str, catatan: str,
+                    exc: Exception | None = None) -> None:
+        """Beri tahu penggunanya tanpa memuntahkan isi perut.
+
+        Pesan seperti "HTTP 429 from the API" di tengah percakapan bukan cuma
+        jelek -- dia memutus keberadaannya sebagai lawan bicara, dan tidak bisa
+        ditindaklanjuti siapa pun kecuali yang menulis kodenya. Detail
+        teknisnya tetap dicatat, cuma tidak di depan mata.
+        """
+        if exc is not None:
+            log.warning("%s -- %s", catatan, exc)
+        ch = self.text_channels.get(key)
+        if ch is None:
+            return
+        try:
+            await ch.send("%s\n-# %s" % (kalimat, catatan))
+        except Exception:
+            pass
 
     async def say(self, guild_id: int, text: str) -> None:
         ch = self.text_channels.get(guild_id)
@@ -278,7 +302,8 @@ class Kaiwa(commands.Cog):
             try:
                 out = await asyncio.to_thread(furigana.both, s.last_bot)
             except Exception as exc:
-                await ctx.send("Gagal baca: %s" % exc)
+                log.warning("furigana gagal -- %s", exc)
+                await ctx.send("Lagi nggak bisa baca yang itu.")
                 return
             await ctx.send("```\n%s\n```" % out[:1800])
             return
@@ -303,7 +328,8 @@ class Kaiwa(commands.Cog):
                 out = await asyncio.to_thread(
                     llm.one_shot, self.cfg, prov, system, s.last_bot)
             except Exception as exc:
-                await ctx.send("Gagal: %s" % exc)
+                log.warning("perintah %s gagal -- %s", label, exc)
+                await ctx.send("Lagi nggak bisa. Coba lagi sebentar.")
                 return
         await ctx.send("**%s**\n%s" % (label, out[:1800]))
 
@@ -627,7 +653,8 @@ class Kaiwa(commands.Cog):
                         pass
                 heard = await asyncio.to_thread(stt.transcribe, cfg, clip, fmt)
             except Exception as exc:
-                await self.say(guild_id, "Gagal dengar: %s" % exc)
+                await self._maaf(guild_id, "ん、聞こえなかった。",
+                                 "suaranya nggak kebaca, coba lagi", exc)
                 return
             if not heard:
                 log.info("  tidak ada ucapan yang dikenali")
@@ -647,19 +674,29 @@ class Kaiwa(commands.Cog):
         """
         cfg = self.cfg
         s = self.session(key)
-        prov = self.provider()
-        if prov is None:
-            await self.say(key, "Belum ada provider di config.")
+        rantai = self.rantai_provider()
+        if not rantai:
+            await self._maaf(key, "……",
+                             "belum ada provider model bahasa di config")
             return
 
         s.add_user(said)
         try:
-            reply = await asyncio.to_thread(
-                llm.complete, cfg, prov, llm.system_prompt(cfg, s.level), s.history(cfg))
-        except Exception as exc:
-            await self.say(key, "Model gagal jawab: %s" % exc)
+            reply, dipakai = await asyncio.to_thread(
+                llm.complete_any, cfg, rantai, llm.system_prompt(cfg, s.level),
+                s.history(cfg))
+        except llm.SemuaGagal as exc:
+            if exc.kena_batas:
+                await self._maaf(key, "ちょっと待って。",
+                                 "lagi kena batas pemakaian — coba lagi sebentar",
+                                 exc)
+            else:
+                await self._maaf(key, "ごめん、今ちょっと無理みたい。",
+                                 "model bahasanya lagi nggak bisa dihubungi", exc)
             s.turns.pop()
             return
+        if dipakai is not rantai[0]:
+            log.info("provider utama gagal; dijawab oleh %s", dipakai.get("name"))
 
         spoken, fix = llm.split_reply(reply)
         if not spoken:
@@ -725,7 +762,9 @@ class Kaiwa(commands.Cog):
         try:
             data = await asyncio.to_thread(tts.speak, self.cfg, text)
         except tts.TTSError as exc:
-            await self.say(guild.id, "Suara gagal: %s" % exc)
+            # Teksnya sudah sampai; yang hilang cuma suaranya.
+            await self._maaf(guild.id, "", "suaranya lagi ngadat, teksnya aja dulu",
+                             exc)
             return
 
         suffix = "." + str(self.cfg["fish"].get("format") or "mp3")
@@ -752,7 +791,7 @@ class Kaiwa(commands.Cog):
             vc.play(discord.FFmpegPCMAudio(path), after=done)
         except Exception as exc:
             done(None)
-            await self.say(guild.id, "Nggak bisa memutar: %s" % exc)
+            await self._maaf(guild.id, "", "klipnya nggak bisa diputar", exc)
 
 
 def build(cfg: dict) -> commands.Bot:
