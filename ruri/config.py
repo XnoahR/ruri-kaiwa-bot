@@ -59,6 +59,10 @@ DEFAULTS: dict = {
         "max_tokens": 1200,
         "oneshot_max_tokens": 1500,
         "timeout_seconds": 90,
+        # Tenggat satu giliran kaiwa, menyeluruh untuk seluruh rantai. Jawaban
+        # yang datang setelah ini tidak menjawab apa-apa lagi -- dan selama
+        # giliran ini masih jalan, ucapan berikutnya dibuang.
+        "turn_deadline_seconds": 30,
         "max_history_turns": 12,
     },
     "fish": {

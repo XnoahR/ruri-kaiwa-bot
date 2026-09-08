@@ -52,6 +52,10 @@ class Session:
         # pengeras suaranya cuma satu.
         self.lock = threading.Lock()
         self.busy = False
+        # Kapan `busy` dipasang. Tanpa ini, satu giliran yang nyangkut membuat
+        # bot membuang semua ucapan berikutnya tanpa jejak apa pun -- dari luar
+        # persis seperti bot yang tuli.
+        self.busy_sejak = 0.0
 
     # ---------------------------------------------------------------- orang
     def _kadaluarsa(self) -> int:

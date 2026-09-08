@@ -45,6 +45,12 @@ lahir dari kegagalan nyata, dan menghapusnya akan mengulang kegagalan itu.
   Jedanya dua tingkat: jatah harian yang habis dijeda sepuluh menit, antrean
   sesaat cuma lima belas detik (`llm.jatah_habis`). Provider yang melayani
   separuh permintaan tetap menghemat jatah lapis terakhir.
+- **`complete_any` punya tenggat menyeluruh (`tenggat`, bawaan
+  `llm.TENGGAT_DETIK`).** Tanpa itu rantai panjang bisa berjalan berjam-jam
+  untuk satu kalimat, dan `Session.busy` menahan setiap ucapan berikutnya
+  selama itu. Sisa tenggat dioper ke `complete(timeout=...)`, jadi permintaan
+  terakhir tidak bisa melampauinya. `Kaiwa.giliran_nyangkut()` adalah jaring
+  terakhirnya; jangan hapus salah satunya tanpa yang lain.
 - **Balasan disaring `llm.balasan_jepang` sebelum diterima.** Tanpa itu,
   `split_reply` mengembalikan seluruh teks apa adanya ketika penanda `<balas>`
   tidak ada -- dan yang sampai ke layar serta ke mesin suara adalah penalaran
