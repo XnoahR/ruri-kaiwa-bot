@@ -2,8 +2,9 @@ name: tes
 
 on:
   push:
-    branches: [master]
+    branches: [master, development]
   pull_request:
+    branches: [master, development]
   workflow_dispatch:
 
 jobs:
@@ -68,3 +69,32 @@ jobs:
             exit 1
           fi
           echo "bersih"
+
+  deploy:
+    # Hanya dari master, dan hanya kalau seluruh matriks tes hijau. Deploy yang
+    # bisa jalan tanpa tes lulus itu bukan CD, cuma rsync dengan langkah ekstra.
+    needs: tes
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-produksi
+      cancel-in-progress: false
+    steps:
+      - name: Siapkan kunci SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          # Kunci ini terkunci ke satu perintah di sisi server (update.sh),
+          # jadi apa pun yang dikirim di sini diabaikan. Itu disengaja.
+          ssh -i ~/.ssh/deploy -p "${{ secrets.SSH_PORT }}" \
+              -o BatchMode=yes -o ConnectTimeout=45 \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" true
+
+      - name: Ringkasan
+        run: echo "### Ter-deploy ke produksi :rocket:" >> $GITHUB_STEP_SUMMARY
