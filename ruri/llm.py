@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 from . import providers
 
@@ -144,6 +145,25 @@ def is_rate_limited(exc) -> bool:
             or "freeusagelimit" in teks or "quota" in teks or "exceeded" in teks)
 
 
+# Provider yang baru kena batas diingat sebentar. Tanpa ini, selama jatahnya
+# belum pulih, setiap giliran membuang satu panggilan gagal dulu -- menambah
+# satu detik penuh ke tiap kalimat, untuk jawaban yang sudah pasti tidak datang.
+JEDA_DETIK = 600
+_jeda: dict = {}
+
+
+def dijeda(nama: str) -> bool:
+    return _jeda.get(nama, 0.0) > time.monotonic()
+
+
+def jedakan(nama: str, detik: int = JEDA_DETIK) -> None:
+    _jeda[nama] = time.monotonic() + detik
+
+
+def lupakan_jeda() -> None:
+    _jeda.clear()
+
+
 def complete_any(cfg: dict, rantai: list, system: str, messages: list,
                  max_tokens: int = 0) -> tuple:
     """Coba provider satu per satu sampai ada yang menjawab.
@@ -154,12 +174,23 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
     yang hilang gara-gara itu terasa seperti bot yang rusak. Provider kedua
     biasanya punya kuota yang sama sekali terpisah.
     """
+    siap = [p for p in rantai if not dijeda(p.get("name", "?"))]
+    # Kalau semuanya sedang dijeda, coba juga -- jeda itu tebakan, dan tebakan
+    # tidak boleh jadi alasan untuk tidak menjawab sama sekali.
+    urutan = siap or rantai
+
     kegagalan: list = []
-    for provider in rantai:
+    for provider in urutan:
+        nama = provider.get("name", "?")
         try:
-            return complete(cfg, provider, system, messages, max_tokens), provider
+            teks = complete(cfg, provider, system, messages, max_tokens)
         except Exception as exc:
-            kegagalan.append((provider.get("name", "?"), exc))
+            kegagalan.append((nama, exc))
+            if is_rate_limited(exc):
+                jedakan(nama)
+            continue
+        _jeda.pop(nama, None)
+        return teks, provider
     raise SemuaGagal(kegagalan)
 
 
