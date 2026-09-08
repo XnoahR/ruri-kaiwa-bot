@@ -98,10 +98,14 @@ class BatasPemakaian(unittest.TestCase):
 class RantaiProvider(unittest.TestCase):
     def setUp(self):
         self.asli = llm.complete
+        # Jeda itu keadaan tingkat modul: tanpa dibersihkan, jeda dari satu tes
+        # bocor ke tes berikutnya dan bikin kegagalan yang membingungkan.
+        llm.lupakan_jeda()
         self.dipanggil = []
 
     def tearDown(self):
         llm.complete = self.asli
+        llm.lupakan_jeda()
 
     def pasang(self, hasil):
         """hasil: dict nama -> teks jawaban, atau Exception untuk gagal."""
@@ -144,3 +148,55 @@ class RantaiProvider(unittest.TestCase):
         with self.assertRaises(llm.SemuaGagal) as ctx:
             llm.complete_any({}, self.RANTAI, "sys", [])
         self.assertFalse(ctx.exception.kena_batas)
+
+
+class JedaProvider(unittest.TestCase):
+    """Provider yang baru kena batas dilewati sebentar, supaya tiap giliran
+    tidak membuang satu panggilan gagal dulu."""
+
+    def setUp(self):
+        self.asli = llm.complete
+        llm.lupakan_jeda()
+        self.dipanggil = []
+
+    def tearDown(self):
+        llm.complete = self.asli
+        llm.lupakan_jeda()
+
+    def pasang(self, hasil):
+        def palsu(cfg, provider, system, messages, max_tokens=0):
+            self.dipanggil.append(provider["name"])
+            keluar = hasil[provider["name"]]
+            if isinstance(keluar, Exception):
+                raise keluar
+            return keluar
+        llm.complete = palsu
+
+    RANTAI = [{"name": "A"}, {"name": "B"}]
+
+    def test_yang_kena_batas_dilewati_di_giliran_berikutnya(self):
+        self.pasang({"A": RuntimeError("HTTP 429"), "B": "ok"})
+        llm.complete_any({}, self.RANTAI, "s", [])
+        self.assertEqual(self.dipanggil, ["A", "B"])
+        self.dipanggil.clear()
+        llm.complete_any({}, self.RANTAI, "s", [])
+        self.assertEqual(self.dipanggil, ["B"], "A harusnya dilewati")
+
+    def test_kegagalan_biasa_tidak_menjedakan(self):
+        """Putus koneksi itu sesaat; jangan dihukum sepuluh menit."""
+        self.pasang({"A": RuntimeError("connection refused"), "B": "ok"})
+        llm.complete_any({}, self.RANTAI, "s", [])
+        self.assertFalse(llm.dijeda("A"))
+
+    def test_berhasil_membatalkan_jedanya(self):
+        llm.jedakan("A")
+        self.pasang({"A": "ok", "B": "ok"})
+        llm.complete_any({}, [{"name": "A"}], "s", [])
+        self.assertFalse(llm.dijeda("A"))
+
+    def test_semua_dijeda_tetap_dicoba(self):
+        """Jeda itu tebakan; jangan sampai bikin dia diam total."""
+        llm.jedakan("A"); llm.jedakan("B")
+        self.pasang({"A": RuntimeError("HTTP 429"), "B": "ok"})
+        teks, dipakai = llm.complete_any({}, self.RANTAI, "s", [])
+        self.assertEqual(dipakai["name"], "B")
