@@ -42,6 +42,9 @@ lahir dari kegagalan nyata, dan menghapusnya akan mengulang kegagalan itu.
   log.
 - **Kegagalan satu provider dicoba ke provider berikutnya.** `llm.complete_any`
   menjalankan `config.provider_chain`; yang gratis kena batas pada jam sibuk.
+  Jedanya dua tingkat: jatah harian yang habis dijeda sepuluh menit, antrean
+  sesaat cuma lima belas detik (`llm.jatah_habis`). Provider yang melayani
+  separuh permintaan tetap menghemat jatah lapis terakhir.
 - **`User-Agent` disebutkan di setiap permintaan HTTP.** urllib mengirim
   `Python-urllib/3.x`, dan Cloudflare memblokirnya dengan 403 error 1010.
 - **wav, bukan mp3, untuk unggahan transkripsi.** Kompresi berkerugian memakan
