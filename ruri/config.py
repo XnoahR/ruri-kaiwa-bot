@@ -23,6 +23,14 @@ DEFAULTS: dict = {
     "chat_channel": "ruri-sinaga",
     # Nama (atau id) kanal suara yang dia tongkrongi terus. Kosong = tunggu !join.
     "voice_channel": "",
+    # Ke mana transkrip giliran suara dikirim.
+    #   "kanal" -- kartu gilirannya muncul di kanal teks, semua orang membacanya
+    #   "dm"    -- cuma ke DM orang yang bicara
+    #   "off"   -- tidak dicatat sama sekali; suaranya tetap jalan
+    # Giliran yang datang dari ketikan selalu dijawab di kanal: kalimatnya sudah
+    # terlihat di situ, dan jawaban yang pindah ke DM cuma terlihat seperti dia
+    # tidak menjawab.
+    "transcript_privacy": "kanal",
     # Masuk sendiri saat mulai, dan balik lagi kalau terputus.
     "auto_join": True,
     # Selang pemeriksaan sambungan suara, detik.
@@ -114,6 +122,10 @@ DEFAULTS: dict = {
         ),
         "correction": True,
         "reply_max_sentences": 2,
+        # Ingatan tiap orang dilupakan setelah sekian menit tidak dipakai. 0
+        # berarti tidak pernah lupa sampai bot direstart -- dan kalimat pertama
+        # seseorang besok pagi akan dijawab sebagai lanjutan obrolan tadi malam.
+        "memory_idle_minutes": 30,
     },
 }
 

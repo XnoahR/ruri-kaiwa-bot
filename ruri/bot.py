@@ -84,7 +84,7 @@ class KaiwaSink(voice_recv.AudioSink):
             diam = (now - turn.last) * 1000 >= silence_ms
             penuh = max_bytes and len(turn.buf) >= max_bytes
             if diam or penuh:
-                done.append((turn.name, bytes(turn.buf)))
+                done.append((uid, turn.name, bytes(turn.buf)))
                 del self.turns[uid]
         return done
 
@@ -104,6 +104,8 @@ class Kaiwa(commands.Cog):
         # Disetel True oleh !leave supaya penjaga tidak menariknya balik tiga
         # puluh detik kemudian. Dibersihkan lagi oleh !join.
         self._jangan_balik = False
+        # Orang yang DM-nya ketutup, biar diberi tahu sekali saja.
+        self._dm_gagal: set = set()
 
     # ------------------------------------------------------------ kanal
     def _cari_kanal(self, guild, tanda: str, suara: bool):
@@ -164,8 +166,85 @@ class Kaiwa(commands.Cog):
     # 瑠璃色, warna tradisional Jepang untuk lapis lazuli -- sesuai namanya.
     WARNA = 0x1E50A2
 
+    # ------------------------------------------------------------ privasi
+    MODE_LOG = ("kanal", "dm", "off")
+
+    ALIAS_LOG = {"channel": "kanal", "pribadi": "dm", "private": "dm",
+                 "mati": "off", "none": "off"}
+
+    def mode_log(self) -> str:
+        nilai = str(self.cfg.get("transcript_privacy") or "kanal").strip().lower()
+        nilai = self.ALIAS_LOG.get(nilai, nilai)
+        return nilai if nilai in self.MODE_LOG else "kanal"
+
+    async def dm(self, uid: int | None):
+        """Kanal pribadi orangnya, kalau bisa dibuka."""
+        if not uid:
+            return None
+        try:
+            orang = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
+            return orang.dm_channel or await orang.create_dm()
+        except Exception as exc:
+            log.warning("nggak bisa buka DM ke %s -- %s", uid, exc)
+            return None
+
+    async def tujuan(self, key: int, uid: int | None, pribadi: bool):
+        """Ke mana kartu satu giliran dikirim.
+
+        Suara tidak pernah dipilih untuk diterbitkan. Kamu bicara di kanal
+        suara, dan transkripnya -- termasuk kalimat yang salah beserta
+        koreksinya -- muncul di kanal teks tempat semua orang membacanya. Buat
+        sebagian orang itu sudah cukup untuk berhenti mencoba, dan orang yang
+        berhenti mencoba tidak belajar apa-apa.
+
+        Discord tidak punya pesan "cuma kamu yang bisa lihat" di luar balasan
+        atas sebuah interaksi, dan suara bukan interaksi. Yang paling dekat
+        adalah mengirimkannya ke DM orangnya sendiri.
+
+        Giliran yang datang dari ketikan tetap di kanal apa pun modenya:
+        kalimatnya sudah terlihat di situ, dan jawaban yang diam-diam pindah ke
+        DM cuma terlihat seperti dia tidak menjawab.
+        """
+        if not pribadi:
+            return self.text_channels.get(key)
+        mode = self.mode_log()
+        if mode == "off":
+            return None
+        if mode == "dm":
+            ch = await self.dm(uid)
+            if ch is None:
+                await self._dm_tertutup(key, uid)
+            return ch
+        return self.text_channels.get(key)
+
+    async def _dm_tertutup(self, key: int, uid: int | None,
+                           exc: Exception | None = None) -> None:
+        """Sekali saja per orang.
+
+        Kartunya tidak terkirim, dan diam tanpa penjelasan membingungkan jauh
+        lebih lama daripada satu baris pemberitahuan.
+        """
+        if not uid or uid in self._dm_gagal:
+            return
+        self._dm_gagal.add(uid)
+        if exc is not None:
+            log.warning("DM ke %s ditolak -- %s", uid, exc)
+        ch = self.text_channels.get(key)
+        if ch is None:
+            return
+        try:
+            await ch.send(
+                "<@%d> transkripmu mau kukirim lewat DM, tapi DM-mu ketutup. "
+                "Nyalakan *Allow direct messages from server members* di "
+                "setelan privasi server ini -- atau `%slog kanal` kalau nggak "
+                "masalah kelihatan." % (uid, self.cfg["prefix"]))
+        except Exception:
+            pass
+
     async def kirim_giliran(self, key: int, siapa: str | None, ucapan: str | None,
-                            kata: str, fix: dict | None, level: str) -> None:
+                            kata: str, fix: dict | None, level: str,
+                            uid: int | None = None,
+                            pribadi: bool = False) -> None:
         """Satu giliran, satu kartu.
 
         Ucapan dan balasan dulu dikirim sebagai dua pesan terpisah, dan itu
@@ -173,7 +252,7 @@ class Kaiwa(commands.Cog):
         Sekarang keduanya satu kartu: ucapanmu jadi kutipan di atas, balasannya
         badan utama, koreksinya bidang tersendiri di bawah.
         """
-        ch = self.text_channels.get(key)
+        ch = await self.tujuan(key, uid, pribadi)
         if ch is None:
             return
 
@@ -202,13 +281,24 @@ class Kaiwa(commands.Cog):
         emb.set_footer(text="JLPT %s" % level)
         try:
             await ch.send(embed=emb)
+            return
+        except discord.Forbidden as exc:
+            if pribadi and self.mode_log() == "dm":
+                await self._dm_tertutup(key, uid, exc)
+                return
+        except Exception as exc:
+            log.warning("embed ditolak -- %s", exc)
+        # Kalau embed ditolak (izin kurang), lebih baik teks polos daripada
+        # balasan yang hilang tanpa jejak -- tapi ke tujuan yang sama, bukan
+        # balik ke kanal umum.
+        try:
+            await ch.send(kata[:1900])
         except Exception:
-            # Kalau embed ditolak (izin kurang), lebih baik teks polos daripada
-            # balasan yang hilang tanpa jejak.
-            await self.say(key, kata)
+            pass
 
     async def _maaf(self, key: int, kalimat: str, catatan: str,
-                    exc: Exception | None = None) -> None:
+                    exc: Exception | None = None, uid: int | None = None,
+                    pribadi: bool = False) -> None:
         """Beri tahu penggunanya tanpa memuntahkan isi perut.
 
         Pesan seperti "HTTP 429 from the API" di tengah percakapan bukan cuma
@@ -218,7 +308,12 @@ class Kaiwa(commands.Cog):
         """
         if exc is not None:
             log.warning("%s -- %s", catatan, exc)
-        ch = self.text_channels.get(key)
+        # Kabar gagal bukan transkrip: mode "off" menyembunyikan isi obrolan,
+        # bukan alasan kenapa dia diam.
+        ch = (await self.dm(uid)) if (pribadi and self.mode_log() == "dm") \
+            else self.text_channels.get(key)
+        if ch is None:
+            ch = self.text_channels.get(key)
         if ch is None:
             return
         try:
@@ -293,14 +388,15 @@ class Kaiwa(commands.Cog):
     async def yomi(self, ctx: commands.Context) -> None:
         """Furigana + romaji buat kalimat terakhirku."""
         s = self.session(ctx.guild.id)
-        if not s.last_bot:
+        kalimat = s.terakhir(ctx.author.id)
+        if not kalimat:
             await ctx.send("Belum ada kalimat buat dibaca.")
             return
         if furigana.available():
             # Jalur cepat: analisis morfologi, milidetik, dan jawabannya sama
             # persis tiap kali. Modelnya cuma dipakai kalau kamusnya tidak ada.
             try:
-                out = await asyncio.to_thread(furigana.both, s.last_bot)
+                out = await asyncio.to_thread(furigana.both, kalimat)
             except Exception as exc:
                 log.warning("furigana gagal -- %s", exc)
                 await ctx.send("Lagi nggak bisa baca yang itu.")
@@ -316,7 +412,8 @@ class Kaiwa(commands.Cog):
 
     async def _helper(self, ctx: commands.Context, system: str, label: str) -> None:
         s = self.session(ctx.guild.id)
-        if not s.last_bot:
+        kalimat = s.terakhir(ctx.author.id)
+        if not kalimat:
             await ctx.send("Belum ada kalimat buat di-%s." % label)
             return
         prov = self.provider()
@@ -326,7 +423,7 @@ class Kaiwa(commands.Cog):
         async with ctx.typing():
             try:
                 out = await asyncio.to_thread(
-                    llm.one_shot, self.cfg, prov, system, s.last_bot)
+                    llm.one_shot, self.cfg, prov, system, kalimat)
             except Exception as exc:
                 log.warning("perintah %s gagal -- %s", label, exc)
                 await ctx.send("Lagi nggak bisa. Coba lagi sebentar.")
@@ -337,16 +434,52 @@ class Kaiwa(commands.Cog):
     async def ulang(self, ctx: commands.Context) -> None:
         """Bacakan lagi kalimat terakhirku."""
         s = self.session(ctx.guild.id)
-        if not s.last_bot:
+        kalimat = s.terakhir(ctx.author.id)
+        if not kalimat:
             await ctx.send("Belum ada yang bisa diulang.")
             return
-        await self._speak(ctx.guild, s.last_bot)
+        await self._speak(ctx.guild, kalimat)
 
     @commands.command(name="reset")
-    async def reset(self, ctx: commands.Context) -> None:
-        """Lupakan percakapan sejauh ini."""
-        self.session(ctx.guild.id).reset()
-        await ctx.send("Percakapannya aku lupakan. Mulai dari awal.")
+    async def reset(self, ctx: commands.Context, arg: str = "") -> None:
+        """Lupakan percakapan sejauh ini. `!reset semua` buat semua orang."""
+        s = self.session(ctx.guild.id)
+        if arg.strip().lower() in ("semua", "all"):
+            s.reset(semua=True)
+            await ctx.send("Ingatanku buat semua orang di sini aku kosongkan.")
+            return
+        s.reset(ctx.author.id)
+        await ctx.send("Obrolan kita aku lupakan. Mulai dari awal.")
+
+    @commands.command(name="log", aliases=["privasi"])
+    async def log_mode(self, ctx: commands.Context, mode: str = "") -> None:
+        """Ke mana transkrip suara dikirim: kanal / dm / off."""
+        from . import config as conf
+
+        p = self.cfg["prefix"]
+        mode = self.ALIAS_LOG.get(mode.strip().lower(), mode.strip().lower())
+        if not mode:
+            await ctx.send(
+                "Transkrip suara sekarang: **%s**\n"
+                "`%slog kanal` kelihatan semua orang - "
+                "`%slog dm` cuma ke DM yang ngomong - "
+                "`%slog off` nggak dicatat sama sekali"
+                % (self.mode_log(), p, p, p))
+            return
+        if mode not in self.MODE_LOG:
+            await ctx.send("Yang ada: %s" % ", ".join(self.MODE_LOG))
+            return
+        self.cfg["transcript_privacy"] = mode
+        # Yang DM-nya dulu ketutup boleh dicoba lagi setelah setelannya diubah.
+        self._dm_gagal.clear()
+        conf.save(self.cfg)
+        pesan = {
+            "kanal": "Transkripnya balik kelihatan di kanal.",
+            "dm": "Mulai sekarang transkrip suara cuma masuk ke DM yang ngomong. "
+                  "Pastikan DM dari anggota server nggak kamu tutup.",
+            "off": "Transkrip suara nggak aku catat lagi. Suaranya tetap jalan.",
+        }
+        await ctx.send(pesan[mode])
 
     @commands.command(name="voice", aliases=["suara"])
     async def voice(self, ctx: commands.Context, *, arg: str = "") -> None:
@@ -503,12 +636,15 @@ class Kaiwa(commands.Cog):
         credit = await asyncio.to_thread(tts.credit, self.cfg)
         await ctx.send(
             "Level **%s** - provider **%s** - suara `%s`\n"
-            "STT `%s` - kredit Fish: %s"
+            "STT `%s` - kredit Fish: %s\n"
+            "Transkrip **%s** - ingatan per orang, lupa setelah %s menit nganggur"
             % (s.level,
                (prov or {}).get("name", "-"),
                self.cfg["fish"].get("voice_id") or "(bawaan)",
                self.cfg["stt"].get("model"),
-               credit if credit is not None else "tidak terbaca")
+               credit if credit is not None else "tidak terbaca",
+               self.mode_log(),
+               self.cfg["kaiwa"].get("memory_idle_minutes"))
         )
 
     @commands.command(name="bantuan")
@@ -525,7 +661,8 @@ class Kaiwa(commands.Cog):
                 "`%schannel here` kunci ke kanal ini (di situ nggak usah di-tag)" % p,
                 "`%schannel off` bebas di mana saja (tapi harus di-tag)" % p,
                 "`%svc` tongkrongi kanal suaramu 24 jam, `%svc off` matiin" % (p, p),
-                "`%sreset` lupakan percakapan" % p,
+                "`%slog dm` transkrip suara cuma ke DM-mu, `%slog kanal` balikin" % (p, p),
+                "`%sreset` lupakan obrolan kita, `%sreset semua` buat semua orang" % (p, p),
                 "`%sstatus` keadaan bot" % p,
             ])
         )
@@ -605,13 +742,14 @@ class Kaiwa(commands.Cog):
                 max_ms = int(self.cfg["stt"].get("max_speech_ms") or 30000)
                 max_bytes = int(max_ms / 1000 * audio.IN_RATE) * audio.FRAME_BYTES
                 for gid, sink in list(self.sinks.items()):
-                    for who, raw in sink.take_finished(
+                    for uid, who, raw in sink.take_finished(
                             int(self.cfg["stt"].get("silence_ms") or 900), max_bytes):
-                        asyncio.create_task(self._handle(gid, who, raw))
+                        asyncio.create_task(self._handle(gid, uid, who, raw))
         except asyncio.CancelledError:
             pass
 
-    async def _handle(self, guild_id: int, who: str, raw: bytes) -> None:
+    async def _handle(self, guild_id: int, uid: int, who: str,
+                      raw: bytes) -> None:
         cfg = self.cfg
         ms = audio.duration_ms(raw)
         if ms < int(cfg["stt"].get("min_speech_ms") or 400):
@@ -654,19 +792,21 @@ class Kaiwa(commands.Cog):
                 heard = await asyncio.to_thread(stt.transcribe, cfg, clip, fmt)
             except Exception as exc:
                 await self._maaf(guild_id, "ん、聞こえなかった。",
-                                 "suaranya nggak kebaca, coba lagi", exc)
+                                 "suaranya nggak kebaca, coba lagi", exc,
+                                 uid=uid, pribadi=True)
                 return
             if not heard:
                 log.info("  tidak ada ucapan yang dikenali")
                 return
             log.info("  terdengar: %s", heard)
 
-            await self._respond(guild_id, heard, speak=True, siapa=who)
+            await self._respond(guild_id, heard, speak=True, siapa=who, uid=uid)
         finally:
             s.busy = False
 
     async def _respond(self, key: int, said: str, speak: bool,
-                       siapa: str | None = None) -> None:
+                       siapa: str | None = None,
+                       uid: int | None = None) -> None:
         """Satu giliran percakapan, dari mana pun asalnya.
 
         Jalur suara dan jalur teks berbagi ini: yang membedakan cuma dari mana
@@ -674,26 +814,31 @@ class Kaiwa(commands.Cog):
         """
         cfg = self.cfg
         s = self.session(key)
+        # `siapa` cuma diisi jalur suara, dan justru giliran suara yang tidak
+        # pernah dipilih untuk diterbitkan. Lihat tujuan().
+        pribadi = siapa is not None
         rantai = self.rantai_provider()
         if not rantai:
             await self._maaf(key, "……",
-                             "belum ada provider model bahasa di config")
+                             "belum ada provider model bahasa di config",
+                             uid=uid, pribadi=pribadi)
             return
 
-        s.add_user(said)
+        s.add_user(uid, said)
         try:
             reply, dipakai = await asyncio.to_thread(
                 llm.complete_any, cfg, rantai, llm.system_prompt(cfg, s.level),
-                s.history(cfg))
+                s.history(cfg, uid))
         except llm.SemuaGagal as exc:
             if exc.kena_batas:
                 await self._maaf(key, "ちょっと待って。",
                                  "lagi kena batas pemakaian — coba lagi sebentar",
-                                 exc)
+                                 exc, uid=uid, pribadi=pribadi)
             else:
                 await self._maaf(key, "ごめん、今ちょっと無理みたい。",
-                                 "model bahasanya lagi nggak bisa dihubungi", exc)
-            s.turns.pop()
+                                 "model bahasanya lagi nggak bisa dihubungi", exc,
+                                 uid=uid, pribadi=pribadi)
+            s.buang_terakhir(uid)
             return
         if dipakai is not rantai[0]:
             log.info("provider utama gagal; dijawab oleh %s", dipakai.get("name"))
@@ -703,11 +848,11 @@ class Kaiwa(commands.Cog):
             log.warning("  balasan kosong; mentah=%d karakter", len(reply))
             return
         log.info("  balas: %s", spoken)
-        s.add_bot(spoken)
-        # `siapa` cuma diisi oleh jalur suara. Di obrolan teks, pesannya sudah
-        # kelihatan tepat di atas -- mengutipnya lagi cuma jadi gema.
+        s.add_bot(uid, spoken)
+        # Di obrolan teks, pesannya sudah kelihatan tepat di atas -- mengutipnya
+        # lagi cuma jadi gema.
         await self.kirim_giliran(key, siapa, said if siapa else None,
-                                 spoken, fix, s.level)
+                                 spoken, fix, s.level, uid=uid, pribadi=pribadi)
 
         guild = self.bot.get_guild(key)
         if speak and guild is not None:
@@ -750,7 +895,8 @@ class Kaiwa(commands.Cog):
                 # kamu; kalau tidak, klip suaranya tidak akan terdengar siapa pun.
                 di_vc = bool(message.guild and message.guild.voice_client
                              and message.guild.voice_client.is_connected())
-                await self._respond(key, teks, speak=di_vc)
+                await self._respond(key, teks, speak=di_vc,
+                                    uid=message.author.id)
         finally:
             s.busy = False
 
