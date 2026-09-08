@@ -85,6 +85,22 @@ duduk di kanal tapi budek. Paket yang gagal dilewati saja.
 **Penjaga suara memeriksa `is_listening()`, bukan cuma sambungannya.** Hadir di
 kanal bukan berarti mendengar.
 
+**Model digilir, bukan diurutkan.** Jatah gratis Gemini dihitung per model per
+hari -- kuotanya sendiri bernama
+`GenerateRequestsPerDayPerProjectPerModel-FreeTier` -- jadi delapan model
+berarti delapan jatah. Tapi hanya kalau dipakai bergantian: dipakai berurutan,
+yang pertama habis lebih dulu setiap hari dan sisanya menunggu giliran yang
+tidak pernah datang. Isi `models` di satu provider, dan tiap giliran memakai
+model berikutnya; yang jatahnya habis dilewati tanpa menjatuhkan sisanya.
+
+**Batas pemakaian ada dua macam, dan bedanya jauh.** `FreeUsageLimitError` atau
+`quota exceeded` berarti kering sampai besok; *"Rate limited, wait a moment"*
+berarti sedetik lagi juga dilayani. Yang pertama dijeda sepuluh menit, yang
+kedua lima belas detik -- dan kalau semua pilihan habis sedangkan sebagiannya
+cuma antre, satu percobaan ulang setelah 1,2 detik masih jauh lebih murah
+daripada giliran yang hilang. Jangan percaya `retryDelay` dari Google: dia
+menyebut 29 detik untuk kuota yang sebenarnya harian.
+
 **Ingatannya per orang, bukan per server.** Satu ruangan berbagi level JLPT
 dan pengeras suara, tapi tidak isi percakapan. Kalau tidak, orang yang baru
 menyapa disambut lanjutan obrolan orang sebelumnya -- dan dari sisi dia itu

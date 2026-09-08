@@ -10,6 +10,12 @@ import unittest
 from ruri import llm
 
 
+def K(nama, model=None):
+    """Kunci jeda: jeda dicatat per model, bukan per provider."""
+    return llm.kunci({"name": nama} if model is None
+                     else {"name": nama, "model": model})
+
+
 class PisahBalasan(unittest.TestCase):
     def test_penalaran_di_luar_penanda_dibuang(self):
         mentah = (
@@ -116,11 +122,16 @@ class RantaiProvider(unittest.TestCase):
         # Jeda itu keadaan tingkat modul: tanpa dibersihkan, jeda dari satu tes
         # bocor ke tes berikutnya dan bikin kegagalan yang membingungkan.
         llm.lupakan_jeda()
+        llm.lupakan_putaran()
+        self.jeda_ulang = llm.JEDA_ULANG
+        llm.JEDA_ULANG = 0
         self.dipanggil = []
 
     def tearDown(self):
         llm.complete = self.asli
         llm.lupakan_jeda()
+        llm.lupakan_putaran()
+        llm.JEDA_ULANG = self.jeda_ulang
 
     def pasang(self, hasil):
         """hasil: dict nama -> teks jawaban, atau Exception untuk gagal."""
@@ -154,7 +165,11 @@ class RantaiProvider(unittest.TestCase):
         with self.assertRaises(llm.SemuaGagal) as ctx:
             llm.complete_any({}, self.RANTAI, "sys", [])
         self.assertTrue(ctx.exception.kena_batas)
-        self.assertEqual(len(ctx.exception.kegagalan), 2)
+        # A cuma antre sesaat, jadi dia dicoba sekali lagi; B jatahnya habis
+        # dan tidak diulang.
+        self.assertEqual(len(ctx.exception.kegagalan), 3)
+        self.assertEqual([k for k, _e in ctx.exception.kegagalan],
+                         [K("A"), K("B"), K("A")])
 
     def test_kegagalan_campuran_bukan_soal_batas(self):
         """Kalau satu putus koneksi, pesannya jangan bilang 'kena batas'."""
@@ -165,6 +180,60 @@ class RantaiProvider(unittest.TestCase):
         self.assertFalse(ctx.exception.kena_batas)
 
 
+class RotasiModel(unittest.TestCase):
+    """Jatah gratis Gemini dihitung per model per hari, jadi delapan model
+    berarti delapan jatah -- tapi hanya kalau dipakai bergantian."""
+
+    def setUp(self):
+        self.asli = llm.complete
+        llm.lupakan_jeda(); llm.lupakan_putaran()
+        self.jeda_ulang = llm.JEDA_ULANG
+        llm.JEDA_ULANG = 0
+        self.dipakai = []
+
+        def palsu(cfg, provider, system, messages, max_tokens=0):
+            self.dipakai.append(provider["model"])
+            return "ok"
+        llm.complete = palsu
+
+    def tearDown(self):
+        llm.complete = self.asli
+        llm.lupakan_jeda(); llm.lupakan_putaran()
+        llm.JEDA_ULANG = self.jeda_ulang
+
+    PROV = {"name": "Gemini", "models": ["m1", "m2", "m3"]}
+
+    def test_giliran_berputar_tiap_panggilan(self):
+        for _ in range(6):
+            llm.complete_any({}, [self.PROV], "s", [])
+        self.assertEqual(self.dipakai, ["m1", "m2", "m3", "m1", "m2", "m3"])
+
+    def test_model_yang_habis_dilewati_tanpa_menjatuhkan_yang_lain(self):
+        def palsu(cfg, provider, system, messages, max_tokens=0):
+            self.dipakai.append(provider["model"])
+            if provider["model"] == "m1":
+                raise RuntimeError("You exceeded your current quota")
+            return "ok"
+        llm.complete = palsu
+        llm.complete_any({}, [self.PROV], "s", [])       # m1 habis -> m2
+        self.dipakai.clear()
+        for _ in range(3):
+            llm.complete_any({}, [self.PROV], "s", [])
+        self.assertNotIn("m1", self.dipakai, "yang habis harusnya dijeda")
+        self.assertEqual(set(self.dipakai), {"m2", "m3"})
+
+    def test_tanpa_daftar_models_entrinya_utuh(self):
+        """Provider satu model dikembalikan apa adanya, bukan salinan --
+        pemanggilnya membandingkan identitas."""
+        prov = {"name": "A", "model": "x"}
+        self.assertIs(llm.varian(prov)[0], prov)
+
+    def test_kunci_jeda_memisahkan_model(self):
+        a = {"name": "G", "model": "m1"}
+        b = {"name": "G", "model": "m2"}
+        self.assertNotEqual(llm.kunci(a), llm.kunci(b))
+
+
 class JedaProvider(unittest.TestCase):
     """Provider yang baru kena batas dilewati sebentar, supaya tiap giliran
     tidak membuang satu panggilan gagal dulu."""
@@ -172,11 +241,16 @@ class JedaProvider(unittest.TestCase):
     def setUp(self):
         self.asli = llm.complete
         llm.lupakan_jeda()
+        llm.lupakan_putaran()
+        self.jeda_ulang = llm.JEDA_ULANG
+        llm.JEDA_ULANG = 0
         self.dipanggil = []
 
     def tearDown(self):
         llm.complete = self.asli
         llm.lupakan_jeda()
+        llm.lupakan_putaran()
+        llm.JEDA_ULANG = self.jeda_ulang
 
     def pasang(self, hasil):
         def palsu(cfg, provider, system, messages, max_tokens=0):
@@ -197,36 +271,58 @@ class JedaProvider(unittest.TestCase):
         llm.complete_any({}, self.RANTAI, "s", [])
         self.assertEqual(self.dipanggil, ["B"], "A harusnya dilewati")
 
+    def test_antrean_sesaat_dicoba_ulang_sekali(self):
+        """Antrean sesaat biasanya sudah lewat sedetik kemudian, dan giliran
+        yang hilang lebih mahal daripada satu percobaan lagi."""
+        habis = [RuntimeError("Rate limited. Wait a moment and try again.")]
+
+        def kadang(cfg, provider, system, messages, max_tokens=0):
+            self.dipanggil.append(provider["name"])
+            if habis:
+                raise habis.pop()
+            return "ok"
+        llm.complete = kadang
+        teks, dipakai = llm.complete_any({}, [{"name": "A"}], "s", [])
+        self.assertEqual(teks, "ok")
+        self.assertEqual(self.dipanggil, ["A", "A"])
+
+    def test_jatah_habis_tidak_dicoba_ulang(self):
+        """Kalau jatahnya memang kering, mencoba lagi cuma menambah jeda."""
+        self.pasang({"A": RuntimeError("You exceeded your current quota")})
+        with self.assertRaises(llm.SemuaGagal):
+            llm.complete_any({}, [{"name": "A"}], "s", [])
+        self.assertEqual(self.dipanggil, ["A"])
+
     def test_antrean_sesaat_dijeda_sebentar_saja(self):
         """Provider yang melayani separuh permintaan masih menghemat jatah
         lapis terakhir; jangan dibuang sepuluh menit karena satu kali antre."""
         self.pasang({"A": RuntimeError("Rate limited. Wait a moment and try again."),
                      "B": "ok"})
         llm.complete_any({}, self.RANTAI, "s", [])
-        sisa = llm._jeda["A"] - time.monotonic()
+        sisa = llm._jeda[K("A")] - time.monotonic()
         self.assertLessEqual(sisa, llm.JEDA_SESAAT)
         self.assertGreater(sisa, 0)
 
     def test_jatah_habis_dijeda_lama(self):
         self.pasang({"A": RuntimeError('{"type":"FreeUsageLimitError"}'), "B": "ok"})
         llm.complete_any({}, self.RANTAI, "s", [])
-        self.assertGreater(llm._jeda["A"] - time.monotonic(), llm.JEDA_SESAAT)
+        self.assertGreater(llm._jeda[K("A")] - time.monotonic(), llm.JEDA_SESAAT)
 
     def test_kegagalan_biasa_tidak_menjedakan(self):
         """Putus koneksi itu sesaat; jangan dihukum sepuluh menit."""
         self.pasang({"A": RuntimeError("connection refused"), "B": "ok"})
         llm.complete_any({}, self.RANTAI, "s", [])
-        self.assertFalse(llm.dijeda("A"))
+        self.assertFalse(llm.dijeda(K("A")))
 
     def test_berhasil_membatalkan_jedanya(self):
-        llm.jedakan("A")
+        llm.jedakan(K("A"))
         self.pasang({"A": "ok", "B": "ok"})
         llm.complete_any({}, [{"name": "A"}], "s", [])
-        self.assertFalse(llm.dijeda("A"))
+        self.assertFalse(llm.dijeda(K("A")))
 
     def test_semua_dijeda_tetap_dicoba(self):
         """Jeda itu tebakan; jangan sampai bikin dia diam total."""
-        llm.jedakan("A"); llm.jedakan("B")
+        llm.jedakan(K("A")); llm.jedakan(K("B"))
         self.pasang({"A": RuntimeError("HTTP 429"), "B": "ok"})
         teks, dipakai = llm.complete_any({}, self.RANTAI, "s", [])
         self.assertEqual(dipakai["name"], "B")
