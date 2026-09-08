@@ -1,0 +1,119 @@
+# Ruri 瑠璃
+
+Partner kaiwa bahasa Jepang di Discord. Kamu ngomong di kanal suara, dia
+dengerin, jawab dalam bahasa Jepang, dan ngomong balik — plus benerin kalimatmu
+kalau janggal.
+
+Namanya dari 瑠璃, lapis lazuli. 瑠璃色 adalah warna langit malam.
+
+## Cara kerjanya
+
+```
+kamu ngomong di VC
+   -> discord-ext-voice-recv   PCM 48k stereo, per orang
+   -> lapisan DAVE             dekripsi ujung-ke-ujung (lihat ruri/dave.py)
+   -> deteksi giliran          jeda antar-paket, bukan event speaking
+   -> ffmpeg                   wav mono 16k
+   -> API transkripsi          bentuk OpenAI, atau Gemini native
+   -> model bahasa             provider apa pun: OpenAI-style / Anthropic
+   -> pisah obrolan & koreksi
+   -> Fish Audio TTS
+   -> ffmpeg -> kanal suara
+```
+
+Transkrip apa yang kamu ucapkan ikut ditulis di kanal teks. Sering kali itu
+sendiri yang paling banyak mengajari.
+
+## Yang dibutuhkan
+
+- **Python 3.10+** dan **ffmpeg**
+- **Bot Discord** dengan *Message Content Intent* dinyalakan
+  (*Server Members* tidak perlu)
+- **API key Fish Audio** untuk suaranya
+- **API key transkripsi** — Groq punya tier gratis dengan `whisper-large-v3`
+- **Satu provider model bahasa** — apa pun yang OpenAI-compatible atau
+  Anthropic. Router lokal juga bisa.
+
+## Pasang
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp config.example.json config.json     # lalu isi kuncinya
+./run.sh
+```
+
+Undang botnya dengan scope `bot` dan izin: *View Channels*, *Send Messages*,
+*Read Message History*, *Connect*, *Speak*.
+
+## Perintah
+
+| perintah | apa yang terjadi |
+|---|---|
+| `!join` / `!leave` (`!disconnect`, `!dc`) | masuk / keluar kanal suara |
+| `!vc` | tongkrongi kanal suaramu 24 jam, `!vc off` matikan |
+| `!channel here` | kunci obrolan ke kanal ini — di situ tidak perlu di-tag |
+| `!channel off` | bebas di kanal mana pun, tapi harus di-tag |
+| `!level n3` | kunci level JLPT (N5–N1) |
+| `!voice` / `!voice list` | daftar suara, `!voice 5` untuk ganti |
+| `!voice tambah <nama> <id>` | simpan suara Fish baru |
+| `!yomi` / `!arti` | furigana+romaji / terjemahan kalimat terakhirnya |
+| `!ulang` | bacakan lagi |
+| `!reset` | lupakan percakapan |
+| `!status` | provider, suara, level, kredit Fish |
+
+## Beberapa keputusan, dan alasannya
+
+**DAVE dibuka sendiri.** Kanal suara Discord memakai enkripsi ujung-ke-ujung,
+dan `discord-ext-voice-recv` mendekripsi lapisan transport lalu langsung
+menyerahkan hasilnya ke Opus — yang menolaknya sebagai *corrupted stream*.
+Menolak DAVE bukan jalan keluar: Discord menutup sambungan dengan kode 4017.
+Kepingannya sebenarnya lengkap — discord.py menjalankan handshake MLS dan
+menyimpan sesinya, `davey` menyediakan `decrypt()` — cuma tidak pernah
+disambungkan. `ruri/dave.py` yang menyambungkannya.
+
+**Paket yang gagal diganti senyap, bukan dibuang.** Paket yang hilang begitu
+saja membuat rekamannya kehilangan dua puluh milidetik tanpa menyisakan jeda:
+potongan ucapan tersambung rapat, dan transkripsinya membaca sambungan itu
+sebagai kata yang tidak pernah diucapkan.
+
+**Satu paket rusak tidak boleh mematikan pendengaran.** `PacketRouter` memanggil
+`stop_listening()` di blok `finally`-nya, jadi satu `OpusError` bikin bot tetap
+duduk di kanal tapi budek. Paket yang gagal dilewati saja.
+
+**Penjaga suara memeriksa `is_listening()`, bukan cuma sambungannya.** Hadir di
+kanal bukan berarti mendengar.
+
+**Deteksi giliran dari jeda antar-paket.** Event "speaking" Discord bisa telat
+atau hilang; jeda paket selalu ada. Ambangnya (`stt.silence_ms`) sengaja longgar
+— orang yang sedang belajar berhenti di tengah kalimat, dan memotongnya di situ
+mengirim potongan tidak utuh ke transkripsi.
+
+**Modelnya diberi tahu bahwa masukannya hasil pengenalan suara.** Tanpa itu, dia
+mengoreksi salah dengar mesin seolah-olah itu kesalahanmu — termasuk mengeyel
+soal ejaan namanya sendiri.
+
+**Balasan dibungkus penanda `<balas>`.** Sebagian model menalar dengan prosa
+biasa, bukan di dalam tag `<think>`, jadi penalarannya tidak bisa disaring dari
+luar. Dengan penanda, apa pun yang dia pikirkan jatuh di luar.
+
+**Furigana tidak lewat model bahasa.** `ruri/furigana.py` memakai MeCab/UniDic:
+milidetik, dan jawabannya sama persis tiap kali. Kamusnya 249MB dan ikut termuat
+ke memori, jadi di mesin kecil paket itu tidak dipasang dan `!yomi` jatuh balik
+ke model bahasa.
+
+**wav, bukan mp3.** Klip satu giliran cuma puluhan kilobita entah bagaimanapun,
+dan kompresi berkerugian memakan justru detail yang membedakan bunyi-bunyi
+bahasa Jepang yang mirip.
+
+**User-Agent disebutkan.** urllib mengirim `Python-urllib/3.x`, dan Cloudflare —
+yang berdiri di depan Groq dan banyak penyedia lain — memblokirnya dengan 403.
+
+**`ruri/providers.py` disalin dari add-on Amadeus Deck** tanpa perubahan logika;
+berkas itu memang sudah nol impor `aqt`.
+
+## Belum ada
+
+- Sambungan ke deck Anki (kosakata yang sedang dipelajari masuk ke obrolan)
+- Slash command; sekarang masih prefix `!`
+- Streaming LLM ke TTS supaya kalimat pertama terdengar lebih cepat

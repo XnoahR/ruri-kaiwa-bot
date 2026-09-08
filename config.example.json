@@ -1,0 +1,49 @@
+{
+  "discord_token": "ISI-TOKEN-BOT-DISCORD-DI-SINI",
+  "prefix": "!",
+  "allowed_guilds": [],
+  "llm": {
+    "active_provider": "",
+    "providers": [
+      {
+        "name": "Ollama",
+        "kind": "openai",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:14b",
+        "api_key": "ollama",
+        "context_window": 32768,
+        "max_tokens": 0
+      }
+    ],
+    "max_tokens": 600,
+    "oneshot_max_tokens": 1500,
+    "timeout_seconds": 90,
+    "max_history_turns": 12
+  },
+  "fish": {
+    "base_url": "https://api.fish.audio",
+    "api_key": "ISI-FISH-AUDIO-API-KEY-DI-SINI",
+    "model": "s2.1-pro-free",
+    "voice_id": "",
+    "format": "mp3",
+    "timeout_seconds": 120
+  },
+  "stt": {
+    "kind": "gemini",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "api_key": "ISI-KUNCI-GEMINI-DI-SINI",
+    "model": "gemini-3.5-transcribe",
+    "language": "ja",
+    "prompt": "",
+    "timeout_seconds": 60,
+    "silence_ms": 900,
+    "min_speech_ms": 400,
+    "max_speech_ms": 30000
+  },
+  "kaiwa": {
+    "level": "N4",
+    "persona": "Kamu partner ngobrol bahasa Jepang. Namamu Ruri. Kamu ramah, santai, dan penasaran sama lawan bicaramu.",
+    "correction": true,
+    "reply_max_sentences": 3
+  }
+}
