@@ -85,6 +85,16 @@ duduk di kanal tapi budek. Paket yang gagal dilewati saja.
 **Penjaga suara memeriksa `is_listening()`, bukan cuma sambungannya.** Hadir di
 kanal bukan berarti mendengar.
 
+**Satu giliran punya tenggat menyeluruh, bukan cuma timeout per permintaan.**
+Rantai dua puluh delapan model yang masing-masing boleh menggantung sembilan
+puluh detik berarti satu kalimat bisa menyandera bot selama empat puluh dua
+menit — dan selama giliran itu berjalan, semua ucapan berikutnya dibuang. Dari
+luar tidak ada bedanya dengan bot yang tuli, karena yang dibuang tidak
+meninggalkan jejak apa pun di log. Sekarang tenggatnya 30 detik
+(`llm.turn_deadline_seconds`), sisa waktunya dioper sebagai timeout permintaan
+berikutnya, ucapan yang dilewati dicatat, dan giliran yang tetap nyangkut lebih
+dari sembilan puluh detik dianggap mati lalu dilangkahi.
+
 **Balasan yang lebih banyak huruf Latin daripada Jepang dibuang, bukan
 dikirim.** Sebagian model
 menalar dengan prosa biasa; kalau penalarannya belum sampai ke penanda `<balas>`

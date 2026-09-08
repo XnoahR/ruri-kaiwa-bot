@@ -135,7 +135,7 @@ class RantaiProvider(unittest.TestCase):
 
     def pasang(self, hasil):
         """hasil: dict nama -> teks jawaban, atau Exception untuk gagal."""
-        def palsu(cfg, provider, system, messages, max_tokens=0):
+        def palsu(cfg, provider, system, messages, max_tokens=0, **_):
             nama = provider["name"]
             self.dipanggil.append(nama)
             keluar = hasil[nama]
@@ -180,6 +180,47 @@ class RantaiProvider(unittest.TestCase):
         self.assertFalse(ctx.exception.kena_batas)
 
 
+class TenggatGiliran(unittest.TestCase):
+    """Rantai panjang tanpa tenggat menyandera giliran berikutnya."""
+
+    def setUp(self):
+        self.asli = llm.complete
+        llm.lupakan_jeda(); llm.lupakan_putaran()
+        self.dipakai = []
+
+    def tearDown(self):
+        llm.complete = self.asli
+        llm.lupakan_jeda(); llm.lupakan_putaran()
+
+    def test_berhenti_mencoba_setelah_tenggat(self):
+        def lambat(cfg, provider, system, messages, max_tokens=0, **_):
+            self.dipakai.append(provider["model"])
+            time.sleep(0.15)
+            raise RuntimeError("connection refused")
+        llm.complete = lambat
+        rantai = [{"name": "G", "models": ["m%d" % i for i in range(40)]}]
+        t0 = time.monotonic()
+        with self.assertRaises(llm.SemuaGagal):
+            llm.complete_any({}, rantai, "s", [], tenggat=1.0)
+        lama = time.monotonic() - t0
+        self.assertLess(lama, 2.5, "harusnya berhenti di tenggat, bukan habiskan 40")
+        self.assertLess(len(self.dipakai), 40)
+
+    def test_sisa_waktu_dioper_sebagai_timeout(self):
+        """Permintaan terakhir tidak boleh boleh menggantung lebih lama
+        daripada sisa tenggatnya."""
+        dilihat = []
+
+        def catat(cfg, provider, system, messages, max_tokens=0, timeout=0, **_):
+            dilihat.append(timeout)
+            return "<balas>はい</balas>"
+        llm.complete = catat
+        llm.complete_any({}, [{"name": "A", "model": "m"}], "s", [], tenggat=10)
+        self.assertTrue(dilihat)
+        self.assertLessEqual(dilihat[0], 10)
+        self.assertGreater(dilihat[0], 0)
+
+
 class SaringBocoran(unittest.TestCase):
     """Penalaran yang bocor lebih buruk daripada satu model dilewati."""
 
@@ -220,7 +261,7 @@ class SaringBocoran(unittest.TestCase):
         llm.lupakan_jeda(); llm.lupakan_putaran()
         dipakai = []
 
-        def palsu(cfg, provider, system, messages, max_tokens=0):
+        def palsu(cfg, provider, system, messages, max_tokens=0, **_):
             dipakai.append(provider["model"])
             if provider["model"] == "m1":
                 return "*   Wait, must be"
@@ -249,7 +290,7 @@ class RotasiModel(unittest.TestCase):
         llm.JEDA_ULANG = 0
         self.dipakai = []
 
-        def palsu(cfg, provider, system, messages, max_tokens=0):
+        def palsu(cfg, provider, system, messages, max_tokens=0, **_):
             self.dipakai.append(provider["model"])
             return "ok"
         llm.complete = palsu
@@ -267,7 +308,7 @@ class RotasiModel(unittest.TestCase):
         self.assertEqual(self.dipakai, ["m1", "m2", "m3", "m1", "m2", "m3"])
 
     def test_model_yang_habis_dilewati_tanpa_menjatuhkan_yang_lain(self):
-        def palsu(cfg, provider, system, messages, max_tokens=0):
+        def palsu(cfg, provider, system, messages, max_tokens=0, **_):
             self.dipakai.append(provider["model"])
             if provider["model"] == "m1":
                 raise RuntimeError("You exceeded your current quota")
@@ -311,7 +352,7 @@ class JedaProvider(unittest.TestCase):
         llm.JEDA_ULANG = self.jeda_ulang
 
     def pasang(self, hasil):
-        def palsu(cfg, provider, system, messages, max_tokens=0):
+        def palsu(cfg, provider, system, messages, max_tokens=0, **_):
             self.dipanggil.append(provider["name"])
             keluar = hasil[provider["name"]]
             if isinstance(keluar, Exception):
@@ -334,7 +375,7 @@ class JedaProvider(unittest.TestCase):
         yang hilang lebih mahal daripada satu percobaan lagi."""
         habis = [RuntimeError("Rate limited. Wait a moment and try again.")]
 
-        def kadang(cfg, provider, system, messages, max_tokens=0):
+        def kadang(cfg, provider, system, messages, max_tokens=0, **_):
             self.dipanggil.append(provider["name"])
             if habis:
                 raise habis.pop()

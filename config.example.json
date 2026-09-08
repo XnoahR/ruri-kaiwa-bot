@@ -24,7 +24,8 @@
     "max_tokens": 1200,
     "oneshot_max_tokens": 1500,
     "timeout_seconds": 90,
-    "max_history_turns": 12
+    "max_history_turns": 12,
+    "turn_deadline_seconds": 30
   },
   "fish": {
     "base_url": "https://api.fish.audio",
