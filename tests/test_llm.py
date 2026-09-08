@@ -180,6 +180,50 @@ class RantaiProvider(unittest.TestCase):
         self.assertFalse(ctx.exception.kena_batas)
 
 
+class SaringBocoran(unittest.TestCase):
+    """Penalaran yang bocor lebih buruk daripada satu model dilewati."""
+
+    def test_menolak_potongan_penalaran(self):
+        for teks in ("*   Wait, must be", 'Ruri\'s reaction: "', "<",
+                     "Okay, the user said good morning, so I should", ""):
+            with self.subTest(teks=teks):
+                self.assertFalse(llm.balasan_jepang(teks))
+
+    def test_menerima_balasan_jepang(self):
+        for teks in ("<balas>おはよう。よく眠れた？</balas>",
+                     "おはよう。",   # tanpa penanda pun sah kalau isinya Jepang
+                     "<balas>ラーメン食べたい</balas>"):
+            with self.subTest(teks=teks):
+                self.assertTrue(llm.balasan_jepang(teks))
+
+    def test_koreksi_saja_bukan_balasan(self):
+        """Kalau yang keluar cuma blok koreksi, tidak ada yang bisa diucapkan."""
+        self.assertFalse(llm.balasan_jepang(
+            "<koreksi>\nasli: それ\nbenar: これ\n</koreksi>"))
+
+    def test_yang_melantur_dilewati_ke_model_berikutnya(self):
+        asli = llm.complete
+        llm.lupakan_jeda(); llm.lupakan_putaran()
+        dipakai = []
+
+        def palsu(cfg, provider, system, messages, max_tokens=0):
+            dipakai.append(provider["model"])
+            if provider["model"] == "m1":
+                return "*   Wait, must be"
+            return "<balas>おはよう</balas>"
+        llm.complete = palsu
+        try:
+            teks, p = llm.complete_any(
+                {}, [{"name": "G", "models": ["m1", "m2"]}], "s", [],
+                saring=llm.balasan_jepang)
+        finally:
+            llm.complete = asli
+            llm.lupakan_jeda(); llm.lupakan_putaran()
+        self.assertEqual(dipakai, ["m1", "m2"])
+        self.assertEqual(p["model"], "m2")
+        self.assertIn("おはよう", teks)
+
+
 class RotasiModel(unittest.TestCase):
     """Jatah gratis Gemini dihitung per model per hari, jadi delapan model
     berarti delapan jatah -- tapi hanya kalau dipakai bergantian."""

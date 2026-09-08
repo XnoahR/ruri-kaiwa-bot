@@ -121,6 +121,29 @@ def split_reply(text: str) -> tuple:
     return spoken, (fix or None)
 
 
+# Hiragana, katakana, kanji.
+JEPANG_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]")
+
+
+def balasan_jepang(teks: str) -> bool:
+    """Balasan tanpa satu pun huruf Jepang bukan balasan.
+
+    Sebagian model menalar dengan prosa biasa, bukan di dalam tag. Kalau
+    penalarannya belum sampai ke penanda <balas> waktu tokennya habis, yang
+    tersisa cuma potongan isi kepalanya -- "* Wait, must be",
+    "Ruri's reaction:". Dulu itu tetap dikirim, karena satu-satunya alternatif
+    adalah diam sama sekali. Sekarang ada model berikutnya di rantai, dan model
+    berikutnya selalu lebih baik daripada isi kepala yang bocor ke layar lalu
+    dibacakan keras-keras oleh mesin suara.
+    """
+    kata, _fix = split_reply(teks)
+    return bool(kata) and bool(JEPANG_RE.search(kata))
+
+
+class Melantur(Exception):
+    """Menjawab, tapi yang keluar bukan balasan."""
+
+
 class SemuaGagal(Exception):
     """Semua provider sudah dicoba dan tidak ada yang menjawab."""
 
@@ -239,10 +262,12 @@ JEDA_ULANG = 1.2
 
 
 def _coba(cfg: dict, kandidat: list, system: str, messages: list,
-          max_tokens: int, kegagalan: list):
+          max_tokens: int, kegagalan: list, saring=None):
     for p in kandidat:
         try:
             teks = complete(cfg, p, system, messages, max_tokens)
+            if saring is not None and not saring(teks):
+                raise Melantur(repr((teks or "")[:80]))
         except Exception as exc:
             kegagalan.append((kunci(p), exc))
             if is_rate_limited(exc):
@@ -254,7 +279,7 @@ def _coba(cfg: dict, kandidat: list, system: str, messages: list,
 
 
 def complete_any(cfg: dict, rantai: list, system: str, messages: list,
-                 max_tokens: int = 0) -> tuple:
+                 max_tokens: int = 0, saring=None) -> tuple:
     """Coba provider satu per satu sampai ada yang menjawab.
 
     -> (teks, provider yang dipakai). Melempar SemuaGagal kalau habis semua.
@@ -271,7 +296,7 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
     urutan = siap or semua
 
     kegagalan: list = []
-    hasil = _coba(cfg, urutan, system, messages, max_tokens, kegagalan)
+    hasil = _coba(cfg, urutan, system, messages, max_tokens, kegagalan, saring)
     if hasil is not None:
         return hasil
 
@@ -284,7 +309,7 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
                      for k, e in kegagalan)]
     if sesaat:
         time.sleep(JEDA_ULANG)
-        hasil = _coba(cfg, sesaat, system, messages, max_tokens, kegagalan)
+        hasil = _coba(cfg, sesaat, system, messages, max_tokens, kegagalan, saring)
         if hasil is not None:
             return hasil
     raise SemuaGagal(kegagalan)

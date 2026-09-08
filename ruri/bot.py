@@ -840,7 +840,7 @@ class Kaiwa(commands.Cog):
         try:
             reply, dipakai = await asyncio.to_thread(
                 llm.complete_any, cfg, rantai, llm.system_prompt(cfg, s.level),
-                s.history(cfg, uid))
+                s.history(cfg, uid), 0, llm.balasan_jepang)
         except llm.SemuaGagal as exc:
             if exc.kena_batas:
                 await self._maaf(key, "ちょっと待って。",
