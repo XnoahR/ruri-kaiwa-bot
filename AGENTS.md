@@ -45,6 +45,16 @@ lahir dari kegagalan nyata, dan menghapusnya akan mengulang kegagalan itu.
   Jedanya dua tingkat: jatah harian yang habis dijeda sepuluh menit, antrean
   sesaat cuma lima belas detik (`llm.jatah_habis`). Provider yang melayani
   separuh permintaan tetap menghemat jatah lapis terakhir.
+- **Riwayat percakapan dikunci per orang, bukan per server.**
+  `Session._orang[uid]`; `add_user`/`add_bot`/`history` semuanya butuh `uid`.
+  Id penuturnya ikut dari paket suara lewat `KaiwaSink.take_finished` ->
+  `_handle` -> `_respond(uid=...)`. Menghapus argumen itu mengembalikan
+  kebocoran obrolan antar-orang, dan bentuk kebocorannya bukan galat.
+- **Transkrip suara punya tujuan yang bisa dipindah.** `Kaiwa.tujuan()`
+  memutuskan kanal / DM / tidak sama sekali dari `transcript_privacy`. Jalur
+  ketikan selalu ke kanal (`pribadi=False`); cuma jalur suara yang bisa pindah.
+  Jangan ganti `ch.send` di `kirim_giliran` jadi `self.say(key, ...)`: itu
+  membalikkannya ke kanal umum dan membocorkan apa yang sengaja disembunyikan.
 - **`User-Agent` disebutkan di setiap permintaan HTTP.** urllib mengirim
   `Python-urllib/3.x`, dan Cloudflare memblokirnya dengan 403 error 1010.
 - **wav, bukan mp3, untuk unggahan transkripsi.** Kompresi berkerugian memakan

@@ -59,7 +59,8 @@ Undang botnya dengan scope `bot` dan izin: *View Channels*, *Send Messages*,
 | `!voice tambah <nama> <id>` | simpan suara Fish baru |
 | `!yomi` / `!arti` | furigana+romaji / terjemahan kalimat terakhirnya |
 | `!ulang` | bacakan lagi |
-| `!reset` | lupakan percakapan |
+| `!log dm` | transkrip suara cuma ke DM yang bicara; `!log kanal` / `!log off` |
+| `!reset` | lupakan obrolanmu; `!reset semua` untuk semua orang |
 | `!status` | provider, suara, level, kredit Fish |
 
 ## Beberapa keputusan, dan alasannya
@@ -83,6 +84,22 @@ duduk di kanal tapi budek. Paket yang gagal dilewati saja.
 
 **Penjaga suara memeriksa `is_listening()`, bukan cuma sambungannya.** Hadir di
 kanal bukan berarti mendengar.
+
+**Ingatannya per orang, bukan per server.** Satu ruangan berbagi level JLPT
+dan pengeras suara, tapi tidak isi percakapan. Kalau tidak, orang yang baru
+menyapa disambut lanjutan obrolan orang sebelumnya -- dan dari sisi dia itu
+tidak terlihat seperti salah ingat, melainkan seperti mengarang. Ingatannya
+juga punya umur (`kaiwa.memory_idle_minutes`, 30 menit): obrolan yang ditinggal
+setengah jam bukan lagi obrolan yang sama meski orangnya sama.
+
+**Transkrip suara bisa dikirim ke DM saja.** Kalimat yang kamu ketik memang kamu
+pilih untuk diterbitkan; kalimat yang kamu ucapkan tidak. Melihat percobaan
+sendiri beserta koreksinya terpampang di kanal yang dibaca semua orang cukup
+untuk membuat sebagian orang berhenti mencoba. Discord tidak punya pesan "cuma
+kamu yang bisa lihat" di luar balasan atas interaksi, dan suara bukan interaksi
+-- jadi yang terdekat adalah DM (`transcript_privacy`). Giliran dari ketikan
+tetap dijawab di kanal: kalimatnya sudah terlihat di situ, dan jawaban yang
+diam-diam pindah ke DM cuma terlihat seperti dia tidak menjawab.
 
 **Deteksi giliran dari jeda antar-paket.** Event "speaking" Discord bisa telat
 atau hilang; jeda paket selalu ada. Ambangnya (`stt.silence_ms`) sengaja longgar
