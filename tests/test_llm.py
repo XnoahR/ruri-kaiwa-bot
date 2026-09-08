@@ -4,6 +4,7 @@ Ini bagian yang paling sering rusak diam-diam: kalau penandanya meleset,
 penalaran model bocor ke layar dan ikut dibacakan mesin suara.
 """
 
+import time
 import unittest
 
 from ruri import llm
@@ -94,6 +95,20 @@ class BatasPemakaian(unittest.TestCase):
             with self.subTest(teks):
                 self.assertFalse(llm.is_rate_limited(teks))
 
+    def test_memisahkan_jatah_habis_dari_antrean_sesaat(self):
+        """Dua-duanya 429, tapi yang satu pulih besok dan yang satu pulih
+        detik berikutnya."""
+        for teks in ('{"type":"FreeUsageLimitError"}',
+                     "You exceeded your current quota",
+                     "requests per day limit reached"):
+            with self.subTest(habis=teks):
+                self.assertTrue(llm.jatah_habis(teks))
+        for teks in ("Rate limited. Wait a moment and try again.",
+                     "HTTP 429 from the API",
+                     "too many requests"):
+            with self.subTest(sesaat=teks):
+                self.assertFalse(llm.jatah_habis(teks))
+
 
 class RantaiProvider(unittest.TestCase):
     def setUp(self):
@@ -181,6 +196,21 @@ class JedaProvider(unittest.TestCase):
         self.dipanggil.clear()
         llm.complete_any({}, self.RANTAI, "s", [])
         self.assertEqual(self.dipanggil, ["B"], "A harusnya dilewati")
+
+    def test_antrean_sesaat_dijeda_sebentar_saja(self):
+        """Provider yang melayani separuh permintaan masih menghemat jatah
+        lapis terakhir; jangan dibuang sepuluh menit karena satu kali antre."""
+        self.pasang({"A": RuntimeError("Rate limited. Wait a moment and try again."),
+                     "B": "ok"})
+        llm.complete_any({}, self.RANTAI, "s", [])
+        sisa = llm._jeda["A"] - time.monotonic()
+        self.assertLessEqual(sisa, llm.JEDA_SESAAT)
+        self.assertGreater(sisa, 0)
+
+    def test_jatah_habis_dijeda_lama(self):
+        self.pasang({"A": RuntimeError('{"type":"FreeUsageLimitError"}'), "B": "ok"})
+        llm.complete_any({}, self.RANTAI, "s", [])
+        self.assertGreater(llm._jeda["A"] - time.monotonic(), llm.JEDA_SESAAT)
 
     def test_kegagalan_biasa_tidak_menjedakan(self):
         """Putus koneksi itu sesaat; jangan dihukum sepuluh menit."""

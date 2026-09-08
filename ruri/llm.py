@@ -145,18 +145,40 @@ def is_rate_limited(exc) -> bool:
             or "freeusagelimit" in teks or "quota" in teks or "exceeded" in teks)
 
 
+_jeda: dict = {}
+
+
+def jatah_habis(exc) -> bool:
+    """Jatahnya benar-benar habis, bukan cuma sedang ramai.
+
+    Dua hal berbeda sama-sama datang sebagai 429. Yang satu berarti jatah
+    harianmu sudah dipakai sampai kering dan baru pulih besok; yang satu lagi
+    cuma "sebentar, lagi antre" -- panggilan berikutnya sering langsung
+    dilayani. Membedakannya menentukan berapa lama providernya dijeda.
+    """
+    teks = str(exc).lower()
+    return ("freeusagelimit" in teks or "quota" in teks or "exceeded" in teks
+            or "per day" in teks or "daily" in teks or "insufficient" in teks)
+
+
 # Provider yang baru kena batas diingat sebentar. Tanpa ini, selama jatahnya
 # belum pulih, setiap giliran membuang satu panggilan gagal dulu -- menambah
 # satu detik penuh ke tiap kalimat, untuk jawaban yang sudah pasti tidak datang.
-JEDA_DETIK = 600
-_jeda: dict = {}
+#
+# Tapi jedanya tidak boleh seragam. Throttle sesaat dijeda pendek saja: provider
+# yang melayani separuh permintaan tetap berharga -- separuh giliran yang dia
+# ambil itu jatah yang tidak jadi dipotong dari lapis terakhir, dan ongkos
+# gagalnya cuma setengah detik.
+JEDA_HABIS = 600
+JEDA_SESAAT = 15
+JEDA_DETIK = JEDA_HABIS      # nama lama, masih dipakai di luar
 
 
 def dijeda(nama: str) -> bool:
     return _jeda.get(nama, 0.0) > time.monotonic()
 
 
-def jedakan(nama: str, detik: int = JEDA_DETIK) -> None:
+def jedakan(nama: str, detik: int = JEDA_HABIS) -> None:
     _jeda[nama] = time.monotonic() + detik
 
 
@@ -187,7 +209,7 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
         except Exception as exc:
             kegagalan.append((nama, exc))
             if is_rate_limited(exc):
-                jedakan(nama)
+                jedakan(nama, JEDA_HABIS if jatah_habis(exc) else JEDA_SESAAT)
             continue
         _jeda.pop(nama, None)
         return teks, provider
