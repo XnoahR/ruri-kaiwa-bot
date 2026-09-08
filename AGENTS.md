@@ -45,6 +45,12 @@ lahir dari kegagalan nyata, dan menghapusnya akan mengulang kegagalan itu.
   Jedanya dua tingkat: jatah harian yang habis dijeda sepuluh menit, antrean
   sesaat cuma lima belas detik (`llm.jatah_habis`). Provider yang melayani
   separuh permintaan tetap menghemat jatah lapis terakhir.
+- **Balasan disaring `llm.balasan_jepang` sebelum diterima.** Tanpa itu,
+  `split_reply` mengembalikan seluruh teks apa adanya ketika penanda `<balas>`
+  tidak ada -- dan yang sampai ke layar serta ke mesin suara adalah penalaran
+  model. Saringannya dioper `complete_any(saring=...)` dari jalur kaiwa saja;
+  `one_shot` (untuk `!arti`) sengaja tidak disaring, jawabannya memang bukan
+  bahasa Jepang.
 - **Jeda dicatat per model (`llm.kunci`), bukan per provider.** Satu provider
   bisa menawarkan banyak model dengan jatah terpisah; menjeda seluruh provider
   gara-gara satu modelnya habis membuang sisanya. `llm.varian()` mengembalikan
