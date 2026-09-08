@@ -35,6 +35,13 @@ lahir dari kegagalan nyata, dan menghapusnya akan mengulang kegagalan itu.
   layar dan ikut dibacakan mesin suara.
 - **Prompt memberi tahu model bahwa masukannya hasil pengenalan suara.** Tanpa
   itu ia mengoreksi salah dengar mesin seolah-olah itu kesalahan penggunanya.
+- **Kesalahan teknis tidak pernah sampai ke kanal.** Pesan seperti
+  `HTTP 429 from the API` memutus keberadaannya sebagai lawan bicara dan tidak
+  bisa ditindaklanjuti siapa pun kecuali yang menulis kodenya. Pakai
+  `_maaf()`: satu kalimat dalam karakter, catatan kecil di `-#`, detailnya ke
+  log.
+- **Kegagalan satu provider dicoba ke provider berikutnya.** `llm.complete_any`
+  menjalankan `config.provider_chain`; yang gratis kena batas pada jam sibuk.
 - **`User-Agent` disebutkan di setiap permintaan HTTP.** urllib mengirim
   `Python-urllib/3.x`, dan Cloudflare memblokirnya dengan 403 error 1010.
 - **wav, bukan mp3, untuk unggahan transkripsi.** Kompresi berkerugian memakan

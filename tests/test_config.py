@@ -55,3 +55,14 @@ class PilihProvider(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Rantai(unittest.TestCase):
+    def test_aktif_di_depan_sisanya_menyusul(self):
+        cfg = {"llm": {"active_provider": "B",
+                       "providers": [{"name": "A"}, {"name": "B"}, {"name": "C"}]}}
+        self.assertEqual([p["name"] for p in config.provider_chain(cfg)],
+                         ["B", "A", "C"])
+
+    def test_tanpa_provider_rantainya_kosong(self):
+        self.assertEqual(config.provider_chain({"llm": {"providers": []}}), [])
