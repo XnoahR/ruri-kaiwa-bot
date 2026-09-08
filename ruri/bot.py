@@ -158,6 +158,16 @@ class Kaiwa(commands.Cog):
 
         return conf.active_provider(self.cfg)
 
+    def ringkas_rotasi(self) -> str:
+        """Berapa model yang siap dipakai di tiap mata rantai."""
+        bagian = []
+        for prov in self.rantai_provider():
+            varian = llm.varian(prov)
+            siap = [v for v in varian if not llm.dijeda(llm.kunci(v))]
+            bagian.append("%s %d/%d" % (prov.get("name", "?"),
+                                        len(siap), len(varian)))
+        return " - ".join(bagian) or "(kosong)"
+
     def rantai_provider(self) -> list:
         from . import config as conf
 
@@ -637,12 +647,14 @@ class Kaiwa(commands.Cog):
         await ctx.send(
             "Level **%s** - provider **%s** - suara `%s`\n"
             "STT `%s` - kredit Fish: %s\n"
+            "Rotasi model: %s\n"
             "Transkrip **%s** - ingatan per orang, lupa setelah %s menit nganggur"
             % (s.level,
                (prov or {}).get("name", "-"),
                self.cfg["fish"].get("voice_id") or "(bawaan)",
                self.cfg["stt"].get("model"),
                credit if credit is not None else "tidak terbaca",
+               self.ringkas_rotasi(),
                self.mode_log(),
                self.cfg["kaiwa"].get("memory_idle_minutes"))
         )
@@ -841,7 +853,9 @@ class Kaiwa(commands.Cog):
             s.buang_terakhir(uid)
             return
         if dipakai is not rantai[0]:
-            log.info("provider utama gagal; dijawab oleh %s", dipakai.get("name"))
+            # Dengan rotasi model, "provider pertama" bukan lagi yang seharusnya
+            # menjawab -- yang berguna dicatat itu siapa yang benar-benar bicara.
+            log.info("dijawab oleh %s", llm.kunci(dipakai))
 
         spoken, fix = llm.split_reply(reply)
         if not spoken:
