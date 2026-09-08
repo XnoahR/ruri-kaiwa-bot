@@ -271,12 +271,30 @@ def lupakan_putaran() -> None:
 # Jeda sebelum mencoba ulang yang cuma kena antrean sesaat.
 JEDA_ULANG = 1.2
 
+# Satu giliran kaiwa punya umur guna. Jawaban yang datang setelah setengah
+# menit tidak menjawab apa-apa lagi: orangnya sudah bicara lagi, atau sudah
+# menyerah. Ini bukan soal kesabaran, tapi soal apa yang menahan giliran
+# berikutnya -- selama satu giliran masih jalan, yang lain dibuang.
+#
+# Tenggatnya menjadi wajib begitu rantainya panjang. Dua puluh delapan model
+# yang masing-masing boleh menggantung sembilan puluh detik berarti satu
+# kalimat bisa menyandera bot selama empat puluh dua menit, dan dari luar itu
+# terlihat persis seperti bot yang tuli.
+TENGGAT_DETIK = 30
+
 
 def _coba(cfg: dict, kandidat: list, system: str, messages: list,
-          max_tokens: int, kegagalan: list, saring=None):
+          max_tokens: int, kegagalan: list, saring=None, batas: float = 0.0):
     for p in kandidat:
+        sisa = (batas - time.monotonic()) if batas else 0.0
+        if batas and sisa <= 1.0:
+            # Sisa waktunya tidak cukup untuk jawaban yang berguna; berhenti
+            # di sini lebih baik daripada membuka satu sambungan lagi yang
+            # tetap harus ditinggalkan.
+            break
         try:
-            teks = complete(cfg, p, system, messages, max_tokens)
+            teks = complete(cfg, p, system, messages, max_tokens,
+                            timeout=int(sisa) if batas else 0)
             if saring is not None and not saring(teks):
                 raise Melantur(repr((teks or "")[:80]))
         except Exception as exc:
@@ -290,7 +308,7 @@ def _coba(cfg: dict, kandidat: list, system: str, messages: list,
 
 
 def complete_any(cfg: dict, rantai: list, system: str, messages: list,
-                 max_tokens: int = 0, saring=None) -> tuple:
+                 max_tokens: int = 0, saring=None, tenggat: float = 0.0) -> tuple:
     """Coba provider satu per satu sampai ada yang menjawab.
 
     -> (teks, provider yang dipakai). Melempar SemuaGagal kalau habis semua.
@@ -300,6 +318,7 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
     biasanya punya kuota yang sama sekali terpisah -- begitu juga model kedua
     di provider yang sama.
     """
+    batas = time.monotonic() + (tenggat or TENGGAT_DETIK)
     semua = [p for prov in rantai for p in urutan_model(prov)]
     siap = [p for p in semua if not dijeda(kunci(p))]
     # Kalau semuanya sedang dijeda, coba juga -- jeda itu tebakan, dan tebakan
@@ -307,7 +326,8 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
     urutan = siap or semua
 
     kegagalan: list = []
-    hasil = _coba(cfg, urutan, system, messages, max_tokens, kegagalan, saring)
+    hasil = _coba(cfg, urutan, system, messages, max_tokens, kegagalan, saring,
+                  batas)
     if hasil is not None:
         return hasil
 
@@ -318,16 +338,17 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
     sesaat = [p for p in urutan
               if any(k == kunci(p) and is_rate_limited(e) and not jatah_habis(e)
                      for k, e in kegagalan)]
-    if sesaat:
+    if sesaat and (batas - time.monotonic()) > JEDA_ULANG + 1.0:
         time.sleep(JEDA_ULANG)
-        hasil = _coba(cfg, sesaat, system, messages, max_tokens, kegagalan, saring)
+        hasil = _coba(cfg, sesaat, system, messages, max_tokens, kegagalan, saring,
+                      batas)
         if hasil is not None:
             return hasil
     raise SemuaGagal(kegagalan)
 
 
 def complete(cfg: dict, provider: dict, system: str, messages: list,
-             max_tokens: int = 0) -> str:
+             max_tokens: int = 0, timeout: int = 0) -> str:
     """Kumpulkan seluruh balasan. Streaming tidak berguna di sini -- kalimatnya
     baru bisa dibacakan setelah utuh."""
     out: list = []
@@ -337,7 +358,7 @@ def complete(cfg: dict, provider: dict, system: str, messages: list,
         system,
         messages,
         max_tokens=max_tokens or int(cfg["llm"].get("max_tokens") or 600),
-        timeout=int(cfg["llm"].get("timeout_seconds") or 90),
+        timeout=timeout or int(cfg["llm"].get("timeout_seconds") or 90),
         on_text=out.append,
         on_status=lambda _code: None,
         should_stop=lambda: False,

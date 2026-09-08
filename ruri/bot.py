@@ -146,6 +146,26 @@ class Kaiwa(commands.Cog):
             return True
         return self.kanal_khusus(channel)
 
+    # Giliran yang lebih lama dari ini dianggap nyangkut, bukan sibuk. Dihitung
+    # dari tenggat rantai model ditambah ruang untuk transkripsi dan suara.
+    BATAS_NYANGKUT = 90
+
+    def giliran_nyangkut(self, s: Session) -> bool:
+        """Jangan biarkan satu giliran yang macet membuat dia tuli selamanya.
+
+        Tenggat di `llm.complete_any` seharusnya sudah mencegahnya, tapi yang
+        dijaga di sini kegagalan yang belum terpikirkan -- dan ongkos salah
+        tebak cuma dua klip suara yang bertindihan sekali, jauh lebih murah
+        daripada bot yang diam sampai ada yang sadar dan me-restart-nya.
+        """
+        if not s.busy:
+            return False
+        umur = time.monotonic() - (s.busy_sejak or 0.0)
+        if umur < self.BATAS_NYANGKUT:
+            return False
+        log.warning("giliran sebelumnya nyangkut %.0f detik; dilanjut", umur)
+        return True
+
     # ------------------------------------------------------------ bantuan
     def session(self, guild_id: int) -> Session:
         s = self.sessions.get(guild_id)
@@ -782,11 +802,16 @@ class Kaiwa(commands.Cog):
             return
 
         s = self.session(guild_id)
-        if s.busy:
+        if s.busy and not self.giliran_nyangkut(s):
             # Satu giliran pada satu waktu: dua permintaan bersamaan berarti dua
-            # klip suara yang saling tindih di kanal yang sama.
+            # klip suara yang saling tindih di kanal yang sama. Tapi ini dicatat
+            # -- ucapan yang dibuang diam-diam tidak bisa dibedakan dari bot
+            # yang rusak, oleh siapa pun, termasuk yang menulis kodenya.
+            log.info("  dilewati: giliran sebelumnya belum selesai (%.0f detik)",
+                     time.monotonic() - (s.busy_sejak or time.monotonic()))
             return
         s.busy = True
+        s.busy_sejak = time.monotonic()
         try:
             try:
                 fmt = str(cfg["stt"].get("upload_format") or "wav")
@@ -840,7 +865,8 @@ class Kaiwa(commands.Cog):
         try:
             reply, dipakai = await asyncio.to_thread(
                 llm.complete_any, cfg, rantai, llm.system_prompt(cfg, s.level),
-                s.history(cfg, uid), 0, llm.balasan_jepang)
+                s.history(cfg, uid), 0, llm.balasan_jepang,
+                float(cfg["llm"].get("turn_deadline_seconds") or 0))
         except llm.SemuaGagal as exc:
             if exc.kena_batas:
                 await self._maaf(key, "ちょっと待って。",
@@ -900,9 +926,10 @@ class Kaiwa(commands.Cog):
         key = message.guild.id if message.guild else message.channel.id
         self.text_channels[key] = message.channel
         s = self.session(key)
-        if s.busy:
+        if s.busy and not self.giliran_nyangkut(s):
             return
         s.busy = True
+        s.busy_sejak = time.monotonic()
         try:
             async with message.channel.typing():
                 # Dibacakan hanya kalau dia memang sedang di kanal suara bareng
