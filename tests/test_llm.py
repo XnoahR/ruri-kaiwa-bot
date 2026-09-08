@@ -183,6 +183,20 @@ class RantaiProvider(unittest.TestCase):
 class SaringBocoran(unittest.TestCase):
     """Penalaran yang bocor lebih buruk daripada satu model dilewati."""
 
+    def test_menolak_penalaran_yang_diekori_kalimat_jepang(self):
+        """Bocoran sering berakhir dengan kalimat yang benar menempel di
+        ujungnya; menuntut 'ada satu huruf Jepang' meloloskan paragrafnya."""
+        for teks in ("-> Wait, needs to be casual and short. おはよう。",
+                     "Japanese only? Yes. Let me answer: おはよう",
+                     "Okay so the user greeted me in Japanese, I should reply "
+                     "in kind with something short. おはよう"):
+            with self.subTest(teks=teks[:30]):
+                self.assertFalse(llm.balasan_jepang(teks))
+
+    def test_romaji_sedikit_tetap_lolos(self):
+        """Balasan Jepang yang menyelipkan satu kata Latin masih balasan."""
+        self.assertTrue(llm.balasan_jepang("<balas>コーヒー飲む？OK？</balas>"))
+
     def test_menolak_potongan_penalaran(self):
         for teks in ("*   Wait, must be", 'Ruri\'s reaction: "', "<",
                      "Okay, the user said good morning, so I should", ""):
