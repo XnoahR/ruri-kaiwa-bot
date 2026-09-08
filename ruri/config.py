@@ -48,6 +48,12 @@ DEFAULTS: dict = {
                 "api_key": "ollama",
                 "context_window": 32768,
                 "max_tokens": 0,
+                # Isi "models" dengan beberapa nama model kalau providermu
+                # menghitung jatah gratisnya per model -- Gemini begitu, kuotanya
+                # bernama GenerateRequestsPerDayPerProjectPerModel-FreeTier.
+                # Ruri menggilirnya tiap giliran, dan model yang jatahnya habis
+                # dilewati tanpa menjatuhkan yang lain. Kosong = pakai "model".
+                "models": [],
             }
         ],
         "max_tokens": 1200,

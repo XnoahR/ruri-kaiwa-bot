@@ -186,6 +186,73 @@ def lupakan_jeda() -> None:
     _jeda.clear()
 
 
+def kunci(p: dict) -> str:
+    """Jeda dicatat per model, bukan per provider.
+
+    Satu provider bisa menawarkan banyak model dengan jatah yang terpisah;
+    menjeda seluruh provider gara-gara satu modelnya habis membuang yang lain.
+    """
+    return "%s/%s" % (p.get("name", "?"), p.get("model", "?"))
+
+
+def varian(provider: dict) -> list:
+    """Provider dipecah jadi satu entri per model.
+
+    Tanpa daftar `models`, entrinya dikembalikan apa adanya -- bukan salinan.
+    Pemanggilnya membandingkan provider yang menjawab dengan yang di rantai,
+    dan salinan memutus perbandingan itu tanpa mengubah apa pun yang terlihat.
+    """
+    daftar = [m for m in (provider.get("models") or []) if m]
+    if not daftar:
+        return [provider]
+    return [dict(provider, model=m) for m in daftar]
+
+
+# Model mana yang mendapat giliran duluan, per provider.
+_putaran: dict = {}
+
+
+def urutan_model(provider: dict) -> list:
+    """Model-model satu provider, digilir.
+
+    Jatah gratis Gemini dihitung per model per hari -- kuotanya sendiri
+    bernama GenerateRequestsPerDayPerProjectPerModel-FreeTier -- jadi delapan
+    model berarti delapan jatah. Tapi hanya kalau dipakai bergantian: dipakai
+    berurutan, yang pertama habis lebih dulu setiap hari dan sisanya menunggu
+    giliran yang tidak pernah datang.
+    """
+    daftar = varian(provider)
+    if len(daftar) < 2:
+        return daftar
+    nama = provider.get("name", "?")
+    n = _putaran.get(nama, 0) % len(daftar)
+    _putaran[nama] = n + 1
+    return daftar[n:] + daftar[:n]
+
+
+def lupakan_putaran() -> None:
+    _putaran.clear()
+
+
+# Jeda sebelum mencoba ulang yang cuma kena antrean sesaat.
+JEDA_ULANG = 1.2
+
+
+def _coba(cfg: dict, kandidat: list, system: str, messages: list,
+          max_tokens: int, kegagalan: list):
+    for p in kandidat:
+        try:
+            teks = complete(cfg, p, system, messages, max_tokens)
+        except Exception as exc:
+            kegagalan.append((kunci(p), exc))
+            if is_rate_limited(exc):
+                jedakan(kunci(p), JEDA_HABIS if jatah_habis(exc) else JEDA_SESAAT)
+            continue
+        _jeda.pop(kunci(p), None)
+        return teks, p
+    return None
+
+
 def complete_any(cfg: dict, rantai: list, system: str, messages: list,
                  max_tokens: int = 0) -> tuple:
     """Coba provider satu per satu sampai ada yang menjawab.
@@ -194,25 +261,32 @@ def complete_any(cfg: dict, rantai: list, system: str, messages: list,
 
     Provider gratis kena batas pemakaian pada jam-jam sibuk, dan satu giliran
     yang hilang gara-gara itu terasa seperti bot yang rusak. Provider kedua
-    biasanya punya kuota yang sama sekali terpisah.
+    biasanya punya kuota yang sama sekali terpisah -- begitu juga model kedua
+    di provider yang sama.
     """
-    siap = [p for p in rantai if not dijeda(p.get("name", "?"))]
+    semua = [p for prov in rantai for p in urutan_model(prov)]
+    siap = [p for p in semua if not dijeda(kunci(p))]
     # Kalau semuanya sedang dijeda, coba juga -- jeda itu tebakan, dan tebakan
     # tidak boleh jadi alasan untuk tidak menjawab sama sekali.
-    urutan = siap or rantai
+    urutan = siap or semua
 
     kegagalan: list = []
-    for provider in urutan:
-        nama = provider.get("name", "?")
-        try:
-            teks = complete(cfg, provider, system, messages, max_tokens)
-        except Exception as exc:
-            kegagalan.append((nama, exc))
-            if is_rate_limited(exc):
-                jedakan(nama, JEDA_HABIS if jatah_habis(exc) else JEDA_SESAAT)
-            continue
-        _jeda.pop(nama, None)
-        return teks, provider
+    hasil = _coba(cfg, urutan, system, messages, max_tokens, kegagalan)
+    if hasil is not None:
+        return hasil
+
+    # Semuanya gagal. Yang cuma kena antrean sesaat biasanya sudah dilayani
+    # sedetik kemudian; satu percobaan ulang jauh lebih murah daripada giliran
+    # yang hilang, dan ongkosnya cuma dibayar pada giliran yang memang sudah
+    # gagal.
+    sesaat = [p for p in urutan
+              if any(k == kunci(p) and is_rate_limited(e) and not jatah_habis(e)
+                     for k, e in kegagalan)]
+    if sesaat:
+        time.sleep(JEDA_ULANG)
+        hasil = _coba(cfg, sesaat, system, messages, max_tokens, kegagalan)
+        if hasil is not None:
+            return hasil
     raise SemuaGagal(kegagalan)
 
 
