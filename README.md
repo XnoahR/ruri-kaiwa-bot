@@ -85,12 +85,15 @@ duduk di kanal tapi budek. Paket yang gagal dilewati saja.
 **Penjaga suara memeriksa `is_listening()`, bukan cuma sambungannya.** Hadir di
 kanal bukan berarti mendengar.
 
-**Balasan tanpa satu pun huruf Jepang dibuang, bukan dikirim.** Sebagian model
+**Balasan yang lebih banyak huruf Latin daripada Jepang dibuang, bukan
+dikirim.** Sebagian model
 menalar dengan prosa biasa; kalau penalarannya belum sampai ke penanda `<balas>`
 waktu tokennya habis, yang tersisa cuma potongan isi kepalanya. Dulu itu tetap
 dikirim karena satu-satunya alternatif adalah diam. Sekarang ada model
 berikutnya di rantai, dan model berikutnya selalu lebih baik daripada isi kepala
-yang bocor ke layar lalu dibacakan keras-keras oleh mesin suara.
+yang bocor ke layar lalu dibacakan keras-keras oleh mesin suara. Yang dihitung
+porsinya, bukan ada-tidaknya: penalaran yang bocor sering berakhir dengan
+kalimat Jepang yang benar menempel di ujungnya.
 
 **Model digilir, bukan diurutkan.** Jatah gratis Gemini dihitung per model per
 hari -- kuotanya sendiri bernama

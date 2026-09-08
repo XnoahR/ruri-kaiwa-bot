@@ -123,10 +123,11 @@ def split_reply(text: str) -> tuple:
 
 # Hiragana, katakana, kanji.
 JEPANG_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]")
+LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def balasan_jepang(teks: str) -> bool:
-    """Balasan tanpa satu pun huruf Jepang bukan balasan.
+    """Balasan yang lebih banyak huruf Latin daripada Jepang bukan balasan.
 
     Sebagian model menalar dengan prosa biasa, bukan di dalam tag. Kalau
     penalarannya belum sampai ke penanda <balas> waktu tokennya habis, yang
@@ -135,9 +136,19 @@ def balasan_jepang(teks: str) -> bool:
     adalah diam sama sekali. Sekarang ada model berikutnya di rantai, dan model
     berikutnya selalu lebih baik daripada isi kepala yang bocor ke layar lalu
     dibacakan keras-keras oleh mesin suara.
+
+    Yang dihitung porsinya, bukan ada-tidaknya: penalaran yang bocor sering
+    berakhir dengan kalimat Jepang yang benar menempel di ujungnya, dan
+    menuntut "ada satu huruf Jepang" saja meloloskan seluruh paragraf yang
+    mendahuluinya. Tanda baca dan angka tidak dihitung di kedua sisi -- yang
+    dibandingkan cuma huruf.
     """
     kata, _fix = split_reply(teks)
-    return bool(kata) and bool(JEPANG_RE.search(kata))
+    if not kata:
+        return False
+    jepang = len(JEPANG_RE.findall(kata))
+    latin = len(LATIN_RE.findall(kata))
+    return jepang > 0 and jepang >= latin
 
 
 class Melantur(Exception):
