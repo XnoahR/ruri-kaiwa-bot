@@ -1,0 +1,70 @@
+name: tes
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 itu yang ada di VPS; 3.12 buat menangkap hal yang bakal patah nanti.
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Pasang ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Pasang dependensi
+        run: |
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -r requirements.txt
+          # Opsional di runtime, tapi di CI dipasang supaya tes romaji ikut jalan
+          # alih-alih dilewati diam-diam.
+          python -m pip install -q fugashi unidic-lite
+
+      - name: Tes
+        run: python -m unittest discover -s tests -v
+
+      - name: Semua modul bisa diimpor
+        run: |
+          python - <<'PY'
+          import ruri.audio, ruri.bot, ruri.config, ruri.dave
+          import ruri.furigana, ruri.llm, ruri.providers
+          import ruri.session, ruri.stt, ruri.tts
+          from ruri import config
+          bot = ruri.bot.build(config.DEFAULTS)
+          print("semua modul terimpor, bot terbangun:", type(bot).__name__)
+          PY
+
+      - name: Contoh config tetap sah dan lengkap
+        run: |
+          python - <<'PY'
+          import json
+          from ruri import config
+          contoh = json.load(open("config.example.json"))
+          kurang = set(config.DEFAULTS) - set(contoh)
+          assert not kurang, "config.example.json ketinggalan kunci: %s" % kurang
+          for bagian in ("llm", "fish", "stt", "kaiwa"):
+              hilang = set(config.DEFAULTS[bagian]) - set(contoh[bagian])
+              assert not hilang, "%s ketinggalan: %s" % (bagian, hilang)
+          print("config.example.json sinkron dengan DEFAULTS")
+          PY
+
+      - name: Tidak ada rahasia yang lolos
+        run: |
+          if git grep -nE 'gsk_[A-Za-z0-9]{30}|sk-fish-[A-Za-z0-9_-]{20}|AIza[A-Za-z0-9_-]{30}' -- . ':!*.yml'; then
+            echo "::error::ada yang mirip API key di dalam repo"
+            exit 1
+          fi
+          echo "bersih"
