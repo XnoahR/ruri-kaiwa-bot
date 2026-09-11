@@ -27,10 +27,10 @@ class Sumber(unittest.TestCase):
         src.tutup_input()
         out = b""
         while True:
-            frame = src.read()
-            if frame is None:
+            frame = src.read()          # bytes mentah -- kontrak discord 2.x
+            if not frame:
                 break
-            out += frame.frame
+            out += frame
             if len(out) > 10 * 48000 * 4:
                 self.fail("tidak habis-habis")
         src.cleanup()

@@ -67,6 +67,11 @@ class Sumber(discord.AudioSource):
             pass
 
     def read(self):
+        """Kontrak discord.py 2.x: bytes mentah 3840 (48k stereo s16le) per
+        panggilan; kosong/None menghentikan pemutaran. `discord.AudioFrame`
+        TIDAK ADA di 2.x -- versi lama/perpustakaan lain; membaca asumsi itu
+        dari luar tidak akan pernah lolos tes yang benar-benar berjalan.
+        """
         try:
             data = self.stream.read(FRAME_BYTES)
         except Exception:
@@ -75,7 +80,7 @@ class Sumber(discord.AudioSource):
             return None
         if len(data) < FRAME_BYTES:
             data = data + b"\x00" * (FRAME_BYTES - len(data))
-        return discord.AudioFrame(data)
+        return data
 
     def cleanup(self) -> None:
         self.tutup_input()
@@ -85,6 +90,12 @@ class Sumber(discord.AudioSource):
         except Exception:
             try:
                 self.proc.kill()
+            except Exception:
+                pass
+        for fh in (self.stream, self.proc.stdout, self.proc.stdin):
+            try:
+                if fh is not None:
+                    fh.close()
             except Exception:
                 pass
 

@@ -259,3 +259,53 @@ dapat divalidasi tanpa manusia di kanal suara telah divalidasi hijau terhadap
 API nyata; satu lapis terakhir (pendengaran & suara keluar di Discord nyata)
 menunggu walkthrough §8 oleh pemilik proyek** — dan bila item di sana gagal,
 lapis-lapis di bawahnya sudah pasti bukan tersangkanya.
+
+---
+
+## 10. Adendum — temuan CI pemilik proyek (pasca-laporan awal)
+
+Saat suite dijalankan di CI (GitHub Actions, ubuntu, ffmpeg **ada**), satu
+tes gagal yang di mesin pengembanganku ter-*skip* justru karena ffmpeg tidak
+ada:
+
+```
+ERROR: test_24k_mono_jadi_48k_stereo (test_live_cog_audio.Sumber)
+  File "ruri/live/cog.py", line 78, in read
+    return discord.AudioFrame(data)
+AttributeError: module 'discord' has no attribute 'AudioFrame'
+```
+
+**Sebab.** `Sumber.read()` mengembalikan `discord.AudioFrame(...)`. Kelas itu
+tidak ada di discord.py 2.x (diuji langsung pada discord.py 2.7.1:
+`'AudioFrame' in dir(discord)` → `False`). Kontrak `AudioSource.read()` adalah
+**`bytes`** mentah 3840, dengan kosong/None sebagai penanda selesai.
+
+**Kenapa lolos lokal.** Mesin pengembanganku tak punya ffmpeg, jadi tiga tes
+`Sumber` berstatus skip (tercatat di §4.1 dan §7.4). Baru dieksekusi pertama
+kalinya di CI yang punya ffmpeg -- dan di situ ia gagal. Ini persis alasan
+berlapisnya verifikasi: CI menangkap apa yang mesin lokal tak bisa jalankan.
+`ResourceWarning: unclosed file` di sekitar tes yang sama adalah gejala
+ikutan (proses ffmpeg tertinggal dari cabang error), bukan bug kedua.
+
+**Perbaikan.**
+- `ruri/live/cog.py` — `Sumber.read()` mengembalikan `bytes` (bukan
+  `AudioFrame`); `cleanup()` menutup stream stdout/stdin agar tak ada fd
+  tertinggal; komentar di `read()` mengunci kontranya supaya asumsi ini tak
+  diulang.
+- `tests/test_live_cog_audio.py` — loop baca disesuaikan ke kontrak bytes.
+
+**Verifikasi ulang.** ffmpeg statis dipasang di venv uji agar cabang ini benar-
+benar dijalankan, bukan di-skip:
+
+| Cek | Hasil |
+|---|---|
+| `test_live_cog_audio` (3 tes, ffmpeg nyata) | **3 OK** |
+| Suite lengkap di venv (dengan ffmpeg) | **122 OK — 0 gagal**, 4 skip (hanya fugashi/UniDic, tak terpasang di venv) |
+| `py_compile` modul terubah | OK |
+| `grep AudioFrame` di ruri/ tests/ | hanya satu komentar penjelas; nol pemanggilan |
+
+**Pelajaran untuk verifikasi berikutnya:** jangan mengandalkan angka skip
+dari mesin yang alatnya kurang. Lapis yang butuh ffmpeg kini punya bukti
+eksekusi nyata (ffmpeg 7.0.2 statis), bukan sekadar "pasti jalan di CI".
+Sisanya tetap sama: satu lapis terakhir (Discord VC nyata) hanya bisa
+ditandatangani manusia — `FITUR-LIVE.md` §8.

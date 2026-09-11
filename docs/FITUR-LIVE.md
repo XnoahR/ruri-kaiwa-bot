@@ -88,6 +88,11 @@ Semuanya sambat resmi dan pasif selama fitur tidak dipakai:
   dibunuh server di menit ke-15. Angka 104857/52428 = default resmi
   (80% dari 128k dan setengahnya) yang ditulis eksplisit supaya perubahan
   default Google tidak mengubah perilaku kita diam-diam.
+- **`Sumber.read()` mengembalikan BYTES mentah 3840**, bukan objek frame —
+  `discord.AudioFrame` tidak ada di discord.py 2.x (kontrak `AudioSource.read
+  -> bytes`, `b""`/None = selesai). Kesalahan ini lolos dari mesin tanpa
+  ffmpeg (tesnya skip) dan baru ditangkap CI yang punya ffmpeg — lihat
+  `LAPORAN-VERIFIKASI-LIVE.md` §10.
 - **`interrupted` harus langsung menghentikan `vc.play` dan membuang buffer**
   — kalau tidak, model "terus bicara menimpa" user.
 - **`live_aktif` adalah satu-satunya penghubung** kedua fitur; jangan pernah
