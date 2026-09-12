@@ -106,6 +106,48 @@ class Kaiwa(commands.Cog):
         self._jangan_balik = False
         # Orang yang DM-nya ketutup, biar diberi tahu sekali saja.
         self._dm_gagal: set = set()
+        # Server yang kanal suaranya sedang dipegang fitur live (ruri/live).
+        # Selama ada di sini, penjaga dan jalur ketikan utama melepaskan diri;
+        # lihat jeda_dengar()/lanjut_dengar().
+        self.live_aktif: set = set()
+
+    # ------------------------------------------------------------ sambat live
+    def jeda_dengar(self, gid: int) -> None:
+        """Serahkan kanal suara ke fitur live.
+
+        Pemanggil (ruri/live/cog.py) wajib `vc.stop_listening()` sendiri
+        sebelum memasang sink-nya: voice_recv hanya punya satu pendengar.
+        """
+        self.live_aktif.add(gid)
+        sink = self.sinks.pop(gid, None)
+        if sink is not None:
+            sink.cleanup()
+
+    async def lanjut_dengar(self, gid: int) -> None:
+        """Kembalikan pendengaran ke pipa utama setelah live berhenti.
+
+        Tidak menggantungkan diri pada penjaga 30 detik: giliran berikutnya
+        tidak boleh hilang cuma-cuma hanya karena mode live baru saja mati.
+        """
+        self.live_aktif.discard(gid)
+        guild = self.bot.get_guild(gid)
+        vc = guild.voice_client if guild else None
+        if vc is None or not vc.is_connected() or gid in self.sinks:
+            return
+        if self._masih_dengar(vc):
+            try:
+                vc.stop_listening()
+            except Exception:
+                pass
+        sink = KaiwaSink(self, gid)
+        try:
+            vc.listen(sink)
+        except Exception as exc:
+            log.warning("gagal memasang kembali pendengaran di %s -- %s", gid, exc)
+            return
+        self.sinks[gid] = sink
+        if self._watcher is None or self._watcher.done():
+            self._watcher = asyncio.create_task(self._watch())
 
     # ------------------------------------------------------------ kanal
     def _cari_kanal(self, guild, tanda: str, suara: bool):
@@ -363,6 +405,9 @@ class Kaiwa(commands.Cog):
     @commands.command(name="join")
     async def join(self, ctx: commands.Context) -> None:
         """Masuk ke kanal suara tempat kamu berada."""
+        if ctx.guild.id in self.live_aktif:
+            await ctx.send("Mode live sedang jalan di sini. `!live off` dulu.")
+            return
         if ctx.author.voice is None or ctx.author.voice.channel is None:
             await ctx.send("Kamu belum ada di kanal suara mana pun.")
             return
@@ -391,6 +436,9 @@ class Kaiwa(commands.Cog):
     @commands.command(name="leave", aliases=["disconnect", "dc", "keluar"])
     async def leave(self, ctx: commands.Context) -> None:
         """Keluar dari kanal suara."""
+        if ctx.guild.id in self.live_aktif:
+            await ctx.send("Mode live sedang jalan di sini. `!live off` dulu.")
+            return
         if ctx.voice_client is None:
             await ctx.send("Aku lagi nggak di kanal suara.")
             return
@@ -736,6 +784,10 @@ class Kaiwa(commands.Cog):
             ids = self.cfg.get("allowed_guilds") or []
             if ids and guild.id not in ids:
                 continue
+            if guild.id in self.live_aktif:
+                # Live sedang memegang sink di sini. is_listening() memang
+                # masih true -- tapi itu telinga orang lain, bukan pipa utama.
+                continue
             tujuan = self._cari_kanal(guild, self.cfg.get("voice_channel", ""), suara=True)
             if tujuan is None:
                 continue
@@ -910,6 +962,10 @@ class Kaiwa(commands.Cog):
             return
         if message.content.startswith(self.cfg["prefix"]):
             return
+        if message.guild and message.guild.id in self.live_aktif:
+            # Sesi live memegang percakapan ruangan ini. Perintah ber-prefix
+            # tetap jalan: framework memprosesnya sebelum listener ini.
+            return
         if not self.boleh_ngobrol(message.channel):
             return
         # Di kanal khususnya, sebutan tidak diperlukan.
@@ -1017,7 +1073,20 @@ def build(cfg: dict) -> commands.Bot:
         return not ids or (ctx.guild is not None and ctx.guild.id in ids)
 
     async def setup() -> None:
-        await bot.add_cog(Kaiwa(bot, cfg))
+        kaiwa = Kaiwa(bot, cfg)
+        await bot.add_cog(kaiwa)
+        if cfg["live"].get("enabled", True):
+            try:
+                from .live.cog import LiveKaiwa
+                await bot.add_cog(LiveKaiwa(bot, cfg, kaiwa))
+                log.info("fitur live terpasang -- perintah `%slive`",
+                         cfg["prefix"])
+            except Exception as exc:
+                # Fitur live yang rusak tidak boleh menjatuhkan bot utama:
+                # perintahnya sekadar tidak ada, sisanya hidup terus. Impornya
+                # tertunda (di dalam sini) supaya kegagalan di ruri/live*
+                # terlokalisasi di satu tempat.
+                log.exception("fitur live tidak terpasang -- %s", exc)
 
     bot.setup_hook = setup
     return bot

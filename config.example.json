@@ -56,5 +56,19 @@
     "correction": true,
     "reply_max_sentences": 2,
     "memory_idle_minutes": 30
+  },
+  "live": {
+    "enabled": true,
+    "api_key": "",
+    "model": "gemini-3.1-flash-live-preview",
+    "voice": "Zephyr",
+    "thinking": "minimal",
+    "transcripts": true,
+    "chunk_ms": 40,
+    "silence_duration_ms": 2000,
+    "prefix_padding_ms": 500,
+    "auto_off_minutes": 30,
+    "system_file": "live_prompts/system.md",
+    "opening_file": "live_prompts/opening.md"
   }
 }

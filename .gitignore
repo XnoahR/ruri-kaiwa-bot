@@ -4,3 +4,8 @@ __pycache__/
 config.json
 *.log
 ruri.log*
+
+# Prompt live yang diedit user di server tidak boleh tertarik git pull;
+# contoh-nya (*.example.md) ikut ke repo.
+live_prompts/*.md
+!live_prompts/*.example.md

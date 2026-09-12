@@ -43,6 +43,7 @@ jobs:
           import ruri.audio, ruri.bot, ruri.config, ruri.dave
           import ruri.furigana, ruri.llm, ruri.providers
           import ruri.session, ruri.stt, ruri.tts
+          from ruri.live import client, cog, pipe, prompt, protocol
           from ruri import config
           bot = ruri.bot.build(config.DEFAULTS)
           print("semua modul terimpor, bot terbangun:", type(bot).__name__)
@@ -64,7 +65,7 @@ jobs:
 
       - name: Tidak ada rahasia yang lolos
         run: |
-          if git grep -nE 'gsk_[A-Za-z0-9]{30}|sk-fish-[A-Za-z0-9_-]{20}|AIza[A-Za-z0-9_-]{30}' -- . ':!*.yml'; then
+          if git grep -nE 'gsk_[A-Za-z0-9]{30}|sk-fish-[A-Za-z0-9_-]{20}|AIza[A-Za-z0-9_-]{30}|AQ\.[A-Za-z0-9_-]{30}' -- . ':!*.yml'; then
             echo "::error::ada yang mirip API key di dalam repo"
             exit 1
           fi

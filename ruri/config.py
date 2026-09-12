@@ -137,6 +137,44 @@ DEFAULTS: dict = {
         # seseorang besok pagi akan dijawab sebagai lanjutan obrolan tadi malam.
         "memory_idle_minutes": 30,
     },
+    # Fitur live: percakapan suara langsung lewat Gemini Live API, terpisah
+    # dari pipa stt->llm->tts.
+    "live": {
+        # Mati = cog-nya tidak didaftarkan sama sekali; perintahnya tidak ada.
+        "enabled": True,
+        # API key. Kosong -> fallback ke stt.api_key (biasanya kunci Gemini
+        # yang sama; kalau stt.kind bukan gemini, isi sendiri).
+        "api_key": "",
+        # Satu-satunya yang terbukti jalan: preview live. ID lain akan ditolak
+        # koneksi dan live/protocol.py memberi peringatan kalau stringnya
+        # bahkan tidak mengandung "live".
+        "model": "gemini-3.1-flash-live-preview",
+        # Salah satu dari 30 suara prebuilt (ruri/live/protocol.py: VOICES).
+        "voice": "Zephyr",
+        # minimal|low|medium|high -- pada model live, thinking = latensi
+        # sebelum kalimat pertama terdengar. Bawaan yang paling cepat.
+        "thinking": "minimal",
+        # Tulis transkrip dua arah ke kanal. Memakan token tambahan di sisi
+        # Google; matikan kalau kuota menipis.
+        "transcripts": True,
+        # Ukuran chunk kirim, ms. Dokumen resmi menyarankan 20-40; di atas
+        # 100 latensi terasa di percakapan.
+        "chunk_ms": 40,
+        # VAD sisi server: sunyi selama ini mengakhiri giliran bicaramu.
+        # Sengaja longgar -- orang belajar berhenti di tengah kalimat;
+        # memotongnya di situ mengirim potongan tak utuh (pelajaran dari
+        # stt.silence_ms di pipa utama).
+        "silence_duration_ms": 2000,
+        # Audio yang dikirim SEDIKIT sebelum VAD menangkap mulai bicara --
+        # tanpa ini suku kata pertama kepotong oleh batas paket Discord.
+        "prefix_padding_ms": 500,
+        # Ruangan sepi selama ini -> keluar sendiri, hemat kuota. 0 = jangan.
+        "auto_off_minutes": 30,
+        # Berkas prompt (relatif ke root proyek). Tidak ada = bawaan kode.
+        # Yang dipakai diedit user di-*.gitignore-kan; *.example.md ikut repo.
+        "system_file": "live_prompts/system.md",
+        "opening_file": "live_prompts/opening.md",
+    },
 }
 
 
