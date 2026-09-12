@@ -309,3 +309,99 @@ dari mesin yang alatnya kurang. Lapis yang butuh ffmpeg kini punya bukti
 eksekusi nyata (ffmpeg 7.0.2 statis), bukan sekadar "pasti jalan di CI".
 Sisanya tetap sama: satu lapis terakhir (Discord VC nyata) hanya bisa
 ditandatangani manusia — `FITUR-LIVE.md` §8.
+
+---
+
+## 11. Adendum 2 — bug produksi kedua (`!live on` crash + bot terjepit)
+
+Setelah §10 masuk, pemilik proyek mencoba `!live on` di server nyata. Ia
+crash dan meninggalkan state yang membuat mode biasa ikut tuli:
+
+```
+File ".../ruri/live/cog.py", line 217, in live_on
+    sink = LiveSink(ses)
+TypeError: Can't instantiate abstract class LiveSink with abstract method cleanup
+```
+
+Lalu muncul gejala yang membingungkan pengguna: `!live off` berkata "nggak
+jalan", tetapi `!join` berkata "mode live sedang jalan". Instruksi pemilik:
+audit dulu dengan bukti, JANGAN fix; operasi git remote dijauhi.
+
+### 11.1 Root cause (dibuktikan, bukan diasumsikan)
+
+**Dua bug, satu akar.**
+
+- **Bug A (crash).** `voice_recv.SinkABC` mendeklarasikan `cleanup` sebagai
+  `@abc.abstractmethod` (sumber: `discord/ext/voice_recv/sinks.py:135`).
+  `LiveSink.__dict__` hanya punya `wants_opus` + `write` — `cleanup` diwarisi
+  sebagai stub abstrak, belum diisi. Python menghukum KELAS abstrak
+  tak-penuh saat INSTANSIASI, bukan saat definisi; itu sebabnya cek-impor CI
+  lolos dan bug baru meledak di produksi. `KaiwaSink` (pipa utama) punya
+  `cleanup` — pola benar ditiru tapi satu metode tertinggal.
+  Bukti lokal: `LiveSink(object())` → `TypeError` yang sama;
+  `sorted(voice_recv.AudioSink.__abstractmethods__)` →
+  `['cleanup','wants_opus','write']`; inspect membedakan `LiveSink.__dict__`
+  (tidak ada `cleanup`) vs `KaiwaSink.__dict__` (ada).
+- **Bug B (bot terjepit).** Di `live_on` lama, `jeda_dengar(gid)` +
+  `stop_listening()` terjadi SEBELUM `LiveSink` dibangun, dan
+  `self.sesi[gid]=ses` SESUDAH `vc.listen`. Crash di tengah = flag
+  `live_aktif` terpasang, telinga utama dilepas, sesi tak pernah terdaftar.
+  `!live off` tak bisa memulihkan (butuh sesi), `!join` tertolak (melihat
+  flag). Pemulihan hanya restart proses. Gejala yang dilaporkan pemilik
+  (`!join` menyalahkan mode live) mengonfirmasi Bug B 100%.
+- **Celah verifikasi (akarnya).** `grep -rn "LiveSink" tests/` → nol hasil.
+  Kelas itu tidak pernah diinstansiasi satu tes pun. Ini kelas bug yang SAMA
+  dengan §10 (`AudioFrame`): runtime path `cog.py` di luar `Sumber` tak punya
+  cakupan, dan CI/venv lokal tidak sampai ke sana karena tak ada Discord
+  nyata.
+
+### 11.2 Perbaikan (test-first, merah lalu hijau)
+
+`tests/test_live_cog_flow.py` ditulis SEBELUM kode produksi disentuh;
+keempatnya dijalankan dan dipastikan MERAH pada versi bug:
+
+| tes | alasan merah (bug asli) | hasil setelah fix |
+|---|---|---|
+| `test_semua_sink_repo_boleh_diinstansiasi` (guard) | `LiveSink.__abstractmethods__` = `{cleanup}` | hijau |
+| `test_sukses_terima_serah_dan_bisa_keluar` | `TypeError` instansiasi `LiveSink` | hijau |
+| `test_gagal_listen_tidak_meninggalkan_bot_tuli` | flag `live_aktif` tertinggal (Bug B) | hijau |
+| `test_off_membersihkan_flag_sisa_crash_lama` | `!live off` tak memulihkan flag basi | hijau |
+
+Guard itu sendiri jaring anti-ulang: ia menguji `__abstractmethods__` kosong
+bagi SEMUA turunan `AudioSink` di repo, jadi metode abstrak yang terlupa mati
+di CI, bukan di panggung — bukan cuma `LiveSink`, tapi juga `KaiwaSink`.
+
+Perbaikan kode:
+- `ruri/live/cog.py`: `LiveSink.cleanup()` diisi (`buf.clear()`, dengan komentar
+  yang menjelaskan kenapa kelas abstrak lolos impor tapi gagal instansiasi).
+- Urutan `live_on` dibalik: SEMUA komponen (termasuk `LiveSink`) dibangun
+  sebelum penyerahan pendengaran; `vc.listen` dibungkus `try/except` yang
+  memanggil `lanjut_dengar()` sebagai rollback. Gagal = tidak pernah
+  meninggalkan bot tuli.
+- `!live off` bisa membersihkan flag sisa-crash (sesi `None` tapi
+  `live_aktif` terisi → pulihkan telinga + beri tahu), bukan lagi jalan buntu.
+
+### 11.3 Verifikasi ulang
+
+| lapis | hasil |
+|---|---|
+| `test_live_cog_flow` (4 tes) | merah → **4 OK** setelah fix |
+| Suite penuh di venv + ffmpeg nyata | **126 OK — 0 gagal**, 4 skip (fugashi/UniDic tak terpasang) |
+| Suite penuh di python sistem (tanpa discord/ffmpeg) | **126 OK**, 17 skip by-design |
+| `py_compile` modul terubah, dua interpreter | OK |
+| Bangun bot offline + 7 sub `!live` | OK |
+| Smoke API nyata (kode produksi, kunci #1) pasca-fix | `SMOKE-RECHECK PASS` — setup, 79.710 B audio, transkrip `元気だよ。どうしたの？`, turnComplete |
+| Guard `__abstractmethods__` semua sink | aktif di CI mulai sekarang |
+
+### 11.4 Yang TIDAK (dan tidak bisa) diverifikasi dari mesin ini — tetap
+
+Bug ini justru menegaskannya: ada runtime path (`cog.py` yang menyentuh
+`sink → vc.listen`, Player discord.py) yang cuma hidup saat Discord + kanal
+suara nyata berjalan. §11 menangkap Bug A+B lewat mock selengkap mungkin,
+tapi mock ≠ VC nyata. Satu lapis terakhir itu tetap: **walkthrough
+`FITUR-LIVE.md` §8 oleh manusia**. Kabar baiknya, mulai sekarang kalau ia
+gagal, penyebabnya audio/Discord — bukan lagi protokol, klien, pipa, prompt,
+sambat, maupun instansiasi sink (semuanya hijau dengan bukti eksekusi).
+
+Batas lama §10 soal `!live muat` (snapshot handle) tidak berubah; pemulihan
+server dari state terjepit sebelum fix ter-deploy: `systemctl restart ruri`.

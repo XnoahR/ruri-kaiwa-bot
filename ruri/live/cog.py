@@ -116,6 +116,16 @@ class LiveSink(voice_recv.AudioSink):
     def wants_opus(self) -> bool:
         return False
 
+    def cleanup(self) -> None:
+        # Bukan hiasan: voice_recv menjadikannya @abstractmethod, dan Python
+        # menghukum KELAS yang belum lengkap baru saat INSTANSIASI -- kelas yang
+        # belum penuh tetap legal didefinisikan, jadi tes yang tidak pernah
+        # membuat LiveSink tidak akan pernah menangkapnya. (Bug produksi
+        # 2026-09-11; pengamannya ada di tests/test_live_cog_flow.)
+        # Isi yang jujur: buang PCM yang tersisa supaya audio basi tidak
+        # menetes ke sesi berikutnya.
+        self.ses.buf.clear()
+
     def write(self, user, data) -> None:
         pcm = getattr(data, "pcm", None)
         if not pcm:
@@ -197,14 +207,12 @@ class LiveKaiwa(commands.Cog):
         elif vc.channel.id != target.id:
             await vc.move_to(target)
 
-        # Serah terima pendengaran dari pipa utama.
-        self.kaiwa.jeda_dengar(gid)
-        try:
-            if vc.is_listening():
-                vc.stop_listening()
-        except Exception:
-            pass
-
+        # Urutan penting: SEMUA komponen dibangun dulu (murni, tanpa efek
+        # samping), baru pendengaran diserahkan. Bug 2026-09-11: LiveSink
+        # dibangun setelah jeda_dengar dan gagal di instansiasi -- flag
+        # tinggal terpasang, telinga utama sudah dilepas, dan sesi tidak pernah
+        # terdaftar: !live off tidak bisa memulihkan, !join tertolak. Gagal
+        # sebelum penyerahan = tidak ada yang perlu di-rollback.
         ses = Sesi(gid, vc, None, None)
         ses.channel = (self.kaiwa.kanal_obrolan(ctx.guild) or ctx.channel)
         url = protocol.ws_url(key)
@@ -215,11 +223,17 @@ class LiveKaiwa(commands.Cog):
         )
         ses.client = cli
         sink = LiveSink(ses)
+
+        # Serah terima pendengaran dari pipa utama.
+        self.kaiwa.jeda_dengar(gid)
         try:
+            if vc.is_listening():
+                vc.stop_listening()
             vc.listen(sink)
-        except Exception as exc:
-            await self._bersih(ses, pasang_ulang=False)
+        except Exception:
+            # Apa pun yang gagal di sini: kembalikan telinga dulu, baru bicara.
             log.exception("live: pasang sink gagal")
+            await self.kaiwa.lanjut_dengar(gid)
             await ctx.send("Aku nggak bisa mulai mendengar di sini. "
                            "-# Detailnya di log.")
             return
@@ -232,9 +246,19 @@ class LiveKaiwa(commands.Cog):
 
     @live.command(name="off")
     async def live_off(self, ctx: commands.Context) -> None:
-        ses = self.sesi.get(ctx.guild.id)
+        gid = ctx.guild.id
+        ses = self.sesi.get(gid)
         if ses is None:
-            await ctx.send("Mode live lagi nggak jalan di sini.")
+            # Sisa kegagalan lama: flag terpasang tanpa sesi (dulu crash
+            # meninggalkan ini, dan !live off tidak bisa menyentuhnya).
+            # Jangan biarkan pengguna terjepit di antara dua pesan yang
+            # saling bertentangan -- bersihkan dan kembalikan telinga.
+            if gid in self.kaiwa.live_aktif:
+                await self.kaiwa.lanjut_dengar(gid)
+                await ctx.send("Flag live sisa crash lama kubersihkan; "
+                               "pendengaran mode biasa aktif lagi.")
+            else:
+                await ctx.send("Mode live lagi nggak jalan di sini.")
             return
         await self._bersih(ses, pasang_ulang=True)
         await ctx.send("Beres, pendengaran kembali ke mode biasa.")

@@ -93,6 +93,19 @@ Semuanya sambat resmi dan pasif selama fitur tidak dipakai:
   -> bytes`, `b""`/None = selesai). Kesalahan ini lolos dari mesin tanpa
   ffmpeg (tesnya skip) dan baru ditangkap CI yang punya ffmpeg — lihat
   `LAPORAN-VERIFIKASI-LIVE.md` §10.
+- **`!live on` membangun SEMUA komponen sebelum menyerahkan pendengaran.**
+  `jeda_dengar()` dipasang setelah `LiveSink` berhasil dikonstruksi; apa pun
+  yang gagal saat `vc.listen` di-rollback dengan `lanjut_dengar()`. Pelajaran
+  dari bug produksi 2026-09-11: penyerahan terjadi lebih dulu, `LiveSink` lalu
+  meledak (metode abstrak `cleanup` belum diimplementasi), dan flag tinggal
+  terpasang tanpa sesi — bot terjepit: `!live off` bilang "nggak jalan",
+  `!join` bilang "live sedang jalan", tuli permanen sampai restart.
+  Pengamannya: `tests/test_live_cog_flow.py` (guard `__abstractmethods__`
+  semua turunan `AudioSink` di repo + tes rollback). Kelas abstrak yang belum
+  penuh itu LEGAL saat definisi — hanya instansiasi yang mengungkapnya, jadi
+  tes wajib menyentuh instansiasi, bukan cuma impor.
+- **`!live off` bisa keluar dari state terjepit**: flag terpasang tanpa sesi
+  (sisa crash lama) dibersihkan + telinga utama dikembalikan.
 - **`interrupted` harus langsung menghentikan `vc.play` dan membuang buffer**
   — kalau tidak, model "terus bicara menimpa" user.
 - **`live_aktif` adalah satu-satunya penghubung** kedua fitur; jangan pernah
