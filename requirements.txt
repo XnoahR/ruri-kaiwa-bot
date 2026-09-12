@@ -1,6 +1,11 @@
 discord.py[voice]>=2.4
 discord-ext-voice-recv>=0.5
 
+# WebSocket untuk fitur live (ruri/live). Sudah ikut terpasang lewat
+# discord.py, tapi dinyatakan di sini karena ruri/live memang memakainya
+# langsung -- dependensi transidental tidak boleh jadi fondasi.
+aiohttp>=3.9,<4
+
 # Opsional: furigana dan romaji tanpa model bahasa (perintah !yomi).
 # Kamusnya 249MB dan ikut termuat ke memori, jadi di VPS 1GB pasang ini cuma
 # kalau memang mau. Tanpa keduanya, !yomi jatuh balik ke model bahasa.
