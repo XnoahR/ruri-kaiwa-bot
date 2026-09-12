@@ -134,20 +134,20 @@ class Kaiwa(commands.Cog):
         vc = guild.voice_client if guild else None
         if vc is None or not vc.is_connected() or gid in self.sinks:
             return
-        if self._masih_dengar(vc):
-            try:
-                vc.stop_listening()
-            except Exception:
-                pass
         sink = KaiwaSink(self, gid)
-        try:
-            vc.listen(sink)
-        except Exception as exc:
-            log.warning("gagal memasang kembali pendengaran di %s -- %s", gid, exc)
-            return
-        self.sinks[gid] = sink
-        if self._watcher is None or self._watcher.done():
-            self._watcher = asyncio.create_task(self._watch())
+        # Pertukaran lewat helper live: pembongkaran reader voice_recv yang
+        # balapan juga menggigit pasang-pasang ulang (lihat ruri/live/swap.py).
+        # swap tidak mengimpor discord, jadi impor lokal ini aman bahkan kalau
+        # sisa paket live rusak.
+        from .live.swap import ganti_telinga
+        if await ganti_telinga(vc, sink, label="utama g%s" % gid):
+            self.sinks[gid] = sink
+            if self._watcher is None or self._watcher.done():
+                self._watcher = asyncio.create_task(self._watch())
+        else:
+            log.warning("gagal memasang kembali pendengaran di %s; penjaga "
+                        "akan mencoba lagi tiap %ss", gid,
+                        self.cfg.get("rejoin_seconds"))
 
     # ------------------------------------------------------------ kanal
     def _cari_kanal(self, guild, tanda: str, suara: bool):

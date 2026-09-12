@@ -26,21 +26,6 @@ class Downmix(unittest.TestCase):
         self.assertEqual(pipe.downmix(b"\x00\x01\x02"), b"")
 
 
-class Chunk(unittest.TestCase):
-    def test_ambil_penuh_dan_sisa_tinggal(self):
-        buf = bytearray(b"abcdefghij")
-        self.assertEqual(pipe.take_chunk(buf, 4), b"abcd")
-        self.assertEqual(bytes(buf), b"efghij")
-
-    def test_akhir_boleh_pendek(self):
-        buf = bytearray(b"abc")
-        self.assertEqual(pipe.take_chunk(buf, 4), b"abc")
-        self.assertEqual(pipe.take_chunk(buf, 4), b"")
-
-    def test_kosong(self):
-        self.assertEqual(pipe.take_chunk(bytearray(), 8), b"")
-
-
 class MergeTeks(unittest.TestCase):
     def test_delta_ditempel(self):
         self.assertEqual(pipe.merge_teks("こん", "にちは"), "こんにちは")

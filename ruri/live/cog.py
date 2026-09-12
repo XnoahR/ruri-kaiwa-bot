@@ -16,7 +16,7 @@ import time
 import discord
 from discord.ext import commands, voice_recv
 
-from . import client, pipe, prompt, protocol
+from . import client, pipe, prompt, protocol, swap
 
 # Catatan: AudioSource diambil lewat discord.AudioSource, bukan discord.audio.*
 # -- tidak ada submodul discord.audio di 2.7; yang ada discord.player.
@@ -24,6 +24,12 @@ log = logging.getLogger("ruri")
 
 WARNA = 0x1E50A2           # 瑠璃色, sama dengan kartu mode utama
 FRAME_BYTES = 3840         # 20 ms stereo 48k 16-bit -- satu frame Opus
+
+# Batas bufer LiveSink, byte mono 48k (~96 B/ms => ~10 detik).
+MAKS_BUFER = 960_000
+MELUAP_JEDA = 30.0         # detik antar-laporan luapan -- jeritan 100 baris
+                           # per detik justru MENYIMPAN penyebabnya
+MACET_PULIH = 5.0          # luapan selama ini = link macet -> mulai_ulang()
 
 
 class Sumber(discord.AudioSource):
@@ -130,16 +136,42 @@ class LiveSink(voice_recv.AudioSink):
         pcm = getattr(data, "pcm", None)
         if not pcm:
             return
-        mono = pipe.downmix(bytes(pcm))
-        buf = self.ses.buf
-        # Ruangan berisik nonstop > 10 detik tanpa koneksi yang bisa mengirim
-        # = kita sedang mati suri; buang sisanya, simpan yang paling baru.
-        if len(buf) > 960_000:
-            del buf[: len(buf) - 960_000]
-            log.warning("live g%s: buffer audio meluap, sisa lama dibuang",
-                        self.ses.gid)
-        buf += mono
-        self.ses.last_dengar = time.monotonic()
+        ses = self.ses
+        ses.buf += pipe.downmix(bytes(pcm))
+        ses.last_dengar = time.monotonic()
+        if len(ses.buf) <= MAKS_BUFER:
+            return
+        # Lebih dari ~10 detik tanpa dikosongkan pompa = link ke model tidak
+        #.consume. Buang yang lama, simpan yang paling baru: topik ruangan
+        # sudah lewat jauh.
+        del ses.buf[: len(ses.buf) - MAKS_BUFER]
+        sekarang = time.monotonic()
+        if ses.macet_sejak is None:
+            ses.macet_sejak = sekarang
+            ses.macet_log = sekarang
+            ses.macet_count = 0
+            log.warning("live g%s: buffer audio meluap, sisa lama dibuang -- "
+                        "dugaan link ke model macet", ses.gid)
+        else:
+            ses.macet_count += 1
+            if sekarang - ses.macet_log >= MELUAP_JEDA:
+                log.warning("live g%s: masih meluap %.0f detik (+%d buangan)",
+                            ses.gid, sekarang - ses.macet_sejak, ses.macet_count)
+                ses.macet_log = sekarang
+                ses.macet_count = 0
+        if (sekarang - ses.macet_sejak >= MACET_PULIH
+                and not ses.pulih_dipanggil and not ses.dibersihkan):
+            # Macet >5 detik = link mati; menunggu tidak menolong. Putus-sambung
+            # dengan handle (konteks sesi utuh). _pompa mereset episode ini
+            # setelah kirim pertama sukses; kalau gagal terus, _jaga yang
+            # menyerah dan mengembalikan mode normal.
+            ses.pulih_dipanggil = True
+            log.warning("live g%s: macet %.0f detik -- menyambung ulang WS",
+                        ses.gid, sekarang - ses.macet_sejak)
+            try:
+                asyncio.get_running_loop().create_task(ses.client.mulai_ulang())
+            except RuntimeError:          # tak ada loop (hanya bisa di tes aneh)
+                pass
 
 
 class Sesi:
@@ -157,6 +189,12 @@ class Sesi:
         self.tugas: asyncio.Task | None = None
         self.pompa: asyncio.Task | None = None
         self.dibersihkan = False
+        # Episode 'kirim macet' (lihat MAKS_BUFER/MACET_PULIH): waktu mulai,
+        # waktu log terakhir, penghitung di antaranya, dan flag pemulihan.
+        self.macet_sejak: float | None = None
+        self.macet_log = 0.0
+        self.macet_count = 0
+        self.pulih_dipanggil = False
 
 
 class LiveKaiwa(commands.Cog):
@@ -224,15 +262,13 @@ class LiveKaiwa(commands.Cog):
         ses.client = cli
         sink = LiveSink(ses)
 
-        # Serah terima pendengaran dari pipa utama.
+        # Serah terima pendengaran -- lewat swap.ganti_telinga, BUKAN
+        # stop_listening()+listen() langsung: itulah balapan produksi
+        # (pembongkaran reader lama membunuh reader baru / dua reader hidup
+        # bersamaan -> DAVE gagal ~50%). Gagal total: lanjut_dengar() sudah
+        # memulihkan sendiri, dan sesi live tidak pernah terdaftar.
         self.kaiwa.jeda_dengar(gid)
-        try:
-            if vc.is_listening():
-                vc.stop_listening()
-            vc.listen(sink)
-        except Exception:
-            # Apa pun yang gagal di sini: kembalikan telinga dulu, baru bicara.
-            log.exception("live: pasang sink gagal")
+        if not await swap.ganti_telinga(vc, sink, label="live g%s" % gid):
             await self.kaiwa.lanjut_dengar(gid)
             await ctx.send("Aku nggak bisa mulai mendengar di sini. "
                            "-# Detailnya di log.")
@@ -377,15 +413,25 @@ class LiveKaiwa(commands.Cog):
         )
 
     async def _pompa(self, ses: Sesi) -> None:
-        """Bufor mono 48k -> potongan chunk_ms -> kirim."""
+        """Bufor mono 48k -> potongan chunk_ms -> kirim.
+
+        Chunk hanya dilepas dari bufer SETELAH kirim sukses -- antrean penuh
+        tidak boleh lagi memakan audio (yang lama: take_chunk lalu dibuang).
+        """
         n = max(2, int(self.cfg["live"].get("chunk_ms") or 40)) * 96  # 96 B/ms
         try:
             while True:
                 await asyncio.sleep(0.02)
                 while len(ses.buf) >= n:
-                    chunk = pipe.take_chunk(ses.buf, n)
+                    chunk = bytes(ses.buf[:n])
                     if not await ses.client.kirim(protocol.audio_message(chunk)):
                         break
+                    del ses.buf[:n]
+                    if ses.macet_sejak is not None:
+                        # Lalulintas pulih -- tutup episode macet.
+                        ses.macet_sejak = None
+                        ses.macet_count = 0
+                        ses.pulih_dipanggil = False
         except asyncio.CancelledError:
             pass
 

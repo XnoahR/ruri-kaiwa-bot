@@ -35,6 +35,12 @@ JEDA_PERCOBAAN = (0.0, 1.0, 3.0)
 # dibalas -- tanpa tenggat ini, sesi diam-diam menggantung selamanya.
 TENG_GUAT_SETUP = 15
 
+# Kirim yang menggantung lebih dari ini berarti link-nya setengah mati (TCP
+# half-open tidak melempar apa-apa). Gejalanya di produksi 2026-09-11: antrean
+# penuh, buffer meluap 2 menit, semua kode merasa "hidup". Kirim macet =
+# koneksi mati: tutup, biarkan pump reconnect (handle sesi tetap).
+TENG_GUAT_KIRIM = 5.0
+
 
 class Putus(Exception):
     """Sesi tidak bisa (atau tidak boleh) dilanjutkan."""
@@ -89,10 +95,16 @@ class LiveSession:
         self._aktif = ws
         self._siap.clear()
         t0 = time.monotonic()
-        await ws.send(json.dumps(self.setup_builder(self.handle)))
-        tugas_kirim = asyncio.create_task(self._pengirim(ws))
+        tugas_kirim = None
         siap = False
         try:
+            # Setup pun bisa menggantung di link setengah mati -- beri tenggat
+            # juga; timeout mengalir ke finally -> koneksi ditutup -> loop
+            # induk menghitungnya sebagai percobaan gagal.
+            await asyncio.wait_for(
+                ws.send(json.dumps(self.setup_builder(self.handle))),
+                timeout=TENG_GUAT_SETUP)
+            tugas_kirim = asyncio.create_task(self._pengirim(ws))
             it = ws.__aiter__()
             while not self._berhenti:
                 try:
@@ -113,7 +125,8 @@ class LiveSession:
                 if self._siap.is_set():
                     siap = True
         finally:
-            tugas_kirim.cancel()
+            if tugas_kirim:
+                tugas_kirim.cancel()
             try:
                 await ws.close()
             except Exception:
@@ -161,10 +174,16 @@ class LiveSession:
         while True:
             obj = await self._kirim.get()
             try:
-                await ws.send(json.dumps(obj))
+                await asyncio.wait_for(ws.send(json.dumps(obj)),
+                                       timeout=TENG_GUAT_KIRIM)
             except Exception as exc:
-                log.warning("live: kirim gagal (%s); antrean dibuang", exc)
+                log.warning("live: kirim gagal/macet (%s) -- koneksi ditutup, "
+                            "biarkan sambung ulang", exc)
                 self._kosongkan()
+                try:
+                    await ws.close()       # melepas pump: reconnect berjenjang
+                except Exception:
+                    pass
                 return
             finally:
                 self._kirim.task_done()
@@ -229,10 +248,10 @@ async def sambungkan(url: str):
 
     sess = aiohttp.ClientSession()
     try:
-        # Tanpa ws timeout: aiohttp baru (3.14) sudah men-deprekatangka float
-        # di sini, dan tenggat handshake/per-pesan sudah kita pegang sendiri
-        # lewat asyncio.wait_for di _sekali.
-        ws = await sess.ws_connect(url)
+        # heartbeat: ping/pong WebSocket bawaan aiohttp. Tanpa ini, peer yang
+        # hilang diam-diam (reset TCP tanpa FIN) tidak pernah terdeteksi oleh
+        # receive() -- dan sesi live-mu tampak "hidup" sambil bisu.
+        ws = await sess.ws_connect(url, heartbeat=30)
     except Exception:
         await sess.close()
         raise
