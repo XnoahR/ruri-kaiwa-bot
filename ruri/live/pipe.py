@@ -30,19 +30,6 @@ def downmix(raw: bytes) -> bytes:
     return out.tobytes()
 
 
-def take_chunk(buf: bytearray, n: int) -> bytes:
-    """Ambil n byte terdepan (boleh lebih pendek kalau sisa tidak penuh).
-
-    Mengembalikan b"" kalau kosong. Byte sisanya tetap di buf -- tidak ada
-    yang hilang di tengah kalimat karena pemotongan chunk.
-    """
-    if not buf:
-        return b""
-    ambil = bytes(buf[:n])
-    del buf[:n]
-    return ambil
-
-
 def merge_teks(lama: str, baru: str) -> str:
     """Gabungkan potongan transkrip streaming.
 

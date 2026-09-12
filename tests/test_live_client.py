@@ -50,6 +50,48 @@ class FakeWS:
 SETUP_OK = {"setupComplete": {}}
 
 
+class WSKuat:
+    """ws yang 'hidup terus': frame habis lalu __anext__ menggantung sampai
+    ditutup -- koneksi yang tidak mati sendiri, untuk uji jalur kirim-macet."""
+
+    def __init__(self, frames, kirim_macet=False):
+        self._frames = list(frames)
+        self._kirim_macet = kirim_macet
+        self._tertutup = asyncio.Event()
+        self.sent = []
+        self.ditutup = False
+
+    async def send(self, text):
+        obj = json.loads(text)
+        if self._kirim_macet and self.sent:      # setup lolos, sisanya menggantung
+            await self._tertutup.wait()
+            return
+        self.sent.append(obj)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._frames:
+            item = self._frames.pop(0)
+            await asyncio.sleep(0)
+            return item
+        await self._tertutup.wait()
+        raise StopAsyncIteration
+
+    async def close(self):
+        if not self.ditutup:
+            self.ditutup = True
+        self._tertutup.set()
+
+
+class WSGantung(WSKuat):
+    """Soket setengah mati: SEND pertama pun tidak pernah kembali."""
+
+    async def send(self, text):
+        await self._tertutup.wait()
+
+
 def turn(text="x"):
     return {"serverContent": {"outputTranscription": {"text": text, "finished": True}}}
 
@@ -133,6 +175,40 @@ class Flap(unittest.IsolatedAsyncioTestCase):
 
 
 class Kirim(unittest.IsolatedAsyncioTestCase):
+    async def test_kirim_macet_menutup_koneksi_dan_sambung_ulang(self):
+        """Skenario log 17:09:34: peer setengah mati -- ws.send menggantung
+        selamanya. Kode lama membiarkannya (antrean penuh, buffer meluap tanpa
+        aksi). Sekarang: kirim macet == koneksi mati -> tutup -> reconnect."""
+        ws1 = WSKuat([SETUP_OK], kirim_macet=True)
+        grup = 0
+
+        async def pabrik(url):
+            nonlocal grup
+            grup += 1
+            return ws1 if grup == 1 else WSKuat([SETUP_OK])
+
+        sess = C.LiveSession("u", lambda h: {"setup": {}}, None, ws=None)
+        with mock.patch.object(C, "sambungkan", pabrik), \
+             mock.patch.object(C, "TENG_GUAT_KIRIM", 0.05), \
+             mock.patch.object(C, "JEDA_PERCOBAAN", (0, 0, 0)), \
+             mock.patch.object(C, "TENG_GUAT_SETUP", 0.5):
+            tugas = asyncio.create_task(sess.mulai())
+            await asyncio.sleep(0.3)
+            await sess.kirim({"realtimeInput": {"text": "x"}})
+            await asyncio.sleep(0.3)
+            self.assertTrue(ws1.ditutup, "kirim macet harus menutup koneksi")
+            await sess.hentikan()
+            await asyncio.wait_for(tugas, timeout=5)
+        self.assertGreaterEqual(grup, 2)      # reconnect terjadi sendiri
+
+    async def test_setup_send_macet_ada_tenggat(self):
+        ws = WSGantung([])            # bahkan SETUP pun menggantung
+        sess = C.LiveSession("u", lambda h: {"setup": {}}, None, ws=ws)
+        with mock.patch.object(C, "TENG_GUAT_SETUP", 0.1), \
+             mock.patch.object(C, "JEDA_PERCOBAAN", (0, 0, 0)):
+            with self.assertRaises(C.Putus):
+                await asyncio.wait_for(sess.mulai(), timeout=5)
+        self.assertTrue(ws.ditutup, "koneksi yang menolak setup harus ditutup")
     async def test_antrean_penuh_ditolak_bukan_menggantung(self):
         sess = C.LiveSession("u", lambda h: {}, None, ws=FakeWS([[]]))
         hasil = [await sess.kirim({"i": n}) for n in range(C.MAKS_ANTREAN + 5)]

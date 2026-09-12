@@ -106,6 +106,18 @@ Semuanya sambat resmi dan pasif selama fitur tidak dipakai:
   tes wajib menyentuh instansiasi, bukan cuma impor.
 - **`!live off` bisa keluar dari state terjepit**: flag terpasang tanpa sesi
   (sisa crash lama) dibersihkan + telinga utama dikembalikan.
+- **Pertukaran telinga SELALU lewat `live/swap.ganti_telinga`** — stop_listening
+  saja tidak cukup: router reader lama selesai di thread dan `finally`-nya bisa
+  membunuh reader yang baru dipasang (race produksi 2026-09-11; "off lalu bisu").
+  Jangan pernah kembali ke `stop_listening()` + `listen()` berdempetan, di sisi
+  main maupun live.
+- **Kirim yang macet = koneksi mati.** `heartbeat=30` di sambungkan +
+  `TENG_GUAT_KIRIM` di `_pengirim`: ws ditutup dari dalam, pump reconnect
+  ber-handle. Peringatan `buffer audio meluap` = gejala link mati, bukan
+  noise: dia tertekan (1 + per 30 s) dan memicu `mulai_ulang()` setelah 5 s.
+  Jangan hapus jaring ini dengan alasan "menyederhanakan".
+- **`!live off` bisa keluar dari state terjepit** (flag tanpa sesi) — satu-satunya
+  jalan keluar selain restart sebelum fix ini; jangan dihilangkan.
 - **`interrupted` harus langsung menghentikan `vc.play` dan membuang buffer**
   — kalau tidak, model "terus bicara menimpa" user.
 - **`live_aktif` adalah satu-satunya penghubung** kedua fitur; jangan pernah

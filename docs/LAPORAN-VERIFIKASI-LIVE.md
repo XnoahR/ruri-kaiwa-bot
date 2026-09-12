@@ -405,3 +405,51 @@ sambat, maupun instansiasi sink (semuanya hijau dengan bukti eksekusi).
 
 Batas lama §10 soal `!live muat` (snapshot handle) tidak berubah; pemulihan
 server dari state terjepit sebelum fix ter-deploy: `systemctl restart ruri`.
+
+## 12. Adendum 3 — bug produksi ketiga: "kadang bisa kadang tidak"
+
+Pemilik proyek melaporkan siklus nyata: `!live on` -> respons aneh -> `!live off` ->
+mode biasa TIDAK merespons lagi, sementara dua orang + bot ada di kanal suara.
+Ini berbeda dari §10 (AudioFrame) dan §11 (cleanup sink) -- kali ini dua bug
+berlapis yang hanya muncul di bawah Discord nyata:
+
+- **Race reader (utama).** voice_recv 0.5.x melepas socket listener secara
+  sinkron saat `stop_listening()`, tapi PacketRouter menyelesaikan teardown di
+  thread dan `finally`-nya memanggil `voice_client.stop_listening()` pada
+  pembaca yang SEDANG terpasang. `!live off` memasang KaiwaSink; router lama
+  lalu membacok reader yang baru itu -> mode biasa bisu. Bukti: `bool(MISSING)
+  == False` (verifikasi interpreter) membuat is_listening() salah jawab, dan
+  dua reader bisa hidup bersamaan -> DAVE gagal ~50% (log: `ok=116 gagal=112`,
+  dst), persis rasio rebutan dekripsi.
+- **Link macet tanpa sinyal.** `ws_connect` tanpa heartbeat + `ws.send` tanpa
+  tenggat -> TCP setengah mati menggantung: antrean penuh, `LiveSink.buf`
+  meluap 2 menit (log 17:09:34), semua kode merasa "hidup", sesi tak pernah
+  reconnect, dan tiap tulis meluap membanjiri log ~100 baris/detik.
+
+### Perbaikan (test-first, merah lalu hijau)
+| item | berkas | isi |
+|---|---|---|
+| R1 | live/swap.py (baru) | `ganti_telinga`: stop -> jeda -> listen, retry khusus "Already receiving", galat asli menyerah seketika. Dipakai live_on, _bersih/lanjut, dan bot.py lanjut_dengar (impor lokal, aman karena swap tak mengimpor discord) |
+| R2 | live/client.py | `heartbeat=30` di sambungkan; `TENG_GUAT_KIRIM=5` -> kirim macet = tutup koneksi = jalur reconnect ber-handle; setup-send juga diberi tenggat |
+| R3 | live/cog.py | overflow tertekan (1 + per MELUAP_JEDA + pemulihan mulai_ulang setelah MACET_PULIH); _pompa tidak lagi memakan audio saat antrean penuh (peek-then-commit) |
+
+Tes baru (test_live_swap.py + perluasan test_live_client/flow) dijalankan
+MERAH pada kode lama (diagnostik ditampilkan), hijau setelah fix:
+`ganti_telinga` menyerap "Already receiving", kirim macet menutup +
+menyambung ulang, overflow 1 log + 1 pemulihan.
+
+### Verifikasi
+| lapis | hasil |
+|---|---|
+| swap (5) + client-macet (2) + flow-luapan/lanjut (2) baru | merah -> **hijau** |
+| Suite penuh venv+ffmpeg | **132 OK, 0 gagal** (4 skip = fugashi/UniDic) |
+| Suite penuh python sistem | **132 OK** (19 skip) |
+| `py_compile` ruri/live/* + bot.py | OK |
+| **Smoke API nyata, siklus stall->mulai_ulang** (kunci #1) | `SMOKE-R2 PASS` - 2x setupComplete (reconnect nyata), 221.794 B audio, model mengingat `「こんにちは」とおっしゃいましたね` -> konteks sesi bertahan lintas koneksi |
+
+Batas yang tersisa: satu lapis terakhir (telinga+suara di kanal suara nyata)
+tetap walkthrough manusia `FITUR-LIVE.md` §8. Tapi gejala spesifik pemilik
+proyek ("off lalu bisu", "kadang tidak jawab") kini punya jaring: tiap
+pertukaran telinga lewat `ganti_telinga`, tiap link macet ketutup dan
+nyambung-ulang sendiri, dan rasio `dave gagal` jadi indikator yang bisa dibaca
+di log pasca-deploy.
