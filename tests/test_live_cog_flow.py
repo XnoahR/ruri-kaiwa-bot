@@ -10,6 +10,7 @@ import asyncio
 import copy
 import types
 import unittest
+from unittest import mock
 
 try:
     from ruri import bot as B
@@ -50,12 +51,14 @@ class WSKuat:
 
 
 class VC:
-    def __init__(self, cid=11, listen_gagal=False):
+    def __init__(self, cid=11, listen_gagal=False, tolak=0):
         self.channel = types.SimpleNamespace(id=cid, name="vc")
         self.listening = False
         self.n_gagal = 1 if listen_gagal else 0
+        self.tolak = tolak          # penolakan "Already receiving" sementara
         self.n_listen = 0
         self.n_stop = 0
+        self.sink = None
 
     def is_connected(self):
         return True
@@ -68,9 +71,13 @@ class VC:
 
     def listen(self, sink):
         self.n_listen += 1
-        if self.n_gagal:                      # hanya percobaan pertama yang gagal
+        if self.tolak:
+            self.tolak -= 1
+            raise RuntimeError("Already receiving audio.")
+        if self.n_gagal:                       # hanya percobaan pertama yang gagal
             self.n_gagal -= 1
             raise RuntimeError("sink lain sedang terpasang")
+        self.sink = sink
         self.listening = True
 
     def stop_listening(self):
@@ -199,6 +206,51 @@ class Alur(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.guild.voice_client.listening)  # telinga terpasang
         self.assertTrue(any("nggak bisa mulai mendengar" in m for m in
                             self.out.kirin), self.out.kirin)
+
+    async def test_lanjut_dengar_bertahan_saat_disibuk(self):
+        """Adu balap produksi: pembaca lama belum rampung -> listen pertama
+        ditolak 'Already receiving'. lanjut_dengar WAJIB mencoba ulang;
+        menyerah sekali = tuli permanen sampai penjaga 30 detik."""
+        ctx = self._pasang(VC())
+        self.kaiwa.jeda_dengar(7)
+        self.guild.voice_client.tolak = 1
+        await self.kaiwa.lanjut_dengar(7)
+        self.assertIsInstance(self.kaiwa.sinks.get(7), B.KaiwaSink)
+        self.assertTrue(self.guild.voice_client.listening)
+        self.assertGreaterEqual(self.guild.voice_client.n_listen, 2)
+
+    async def test_luapan_dilog_sekali_dan_memulihkan(self):
+        """Log 17:09:34: 100 baris/detik tanpa aksi. Sekarang: satu peringatan,
+        penghitung, dan pemulihan otomatis (mulai_ulang) saat macet berlanjut."""
+        ctx = self._pasang(VC())
+        await panggil(self.live, "live_on", ctx)
+        try:
+            ses = self.live.sesi[7]
+            sink = self.guild.voice_client.sink
+            self.assertIsInstance(sink, CG.LiveSink)
+            pemulihan = []
+
+            async def pulih():
+                pemulihan.append(1)
+            ses.client.mulai_ulang = pulih
+            frame = types.SimpleNamespace(pcm=b"\x01\x00" * 16)
+            with mock.patch.object(CG, "MAKS_BUFER", 64), \
+                 mock.patch.object(CG, "MELUAP_JEDA", 60.0), \
+                 mock.patch.object(CG, "MACET_PULIH", 0.02):
+                with self.assertLogs("ruri", level="WARNING") as cap:
+                    for _ in range(10):
+                        sink.write(None, frame)
+                self.assertEqual(sum("meluap" in m for m in cap.output), 1,
+                                 cap.output)
+                await asyncio.sleep(0.05)
+                sink.write(None, frame)
+                await asyncio.sleep(0.01)
+                self.assertEqual(len(pemulihan), 1, pemulihan)
+                sink.write(None, frame)
+                await asyncio.sleep(0.01)
+                self.assertEqual(len(pemulihan), 1)   # hanya sekali per kemacetan
+        finally:
+            await self.live._bersih(self.live.sesi.get(7) or ses, pasang_ulang=False)
 
     async def test_off_membersihkan_flag_sisa_crash_lama(self):
         """Jalur pemulihan mandiri: state terjepit (flag tanpa sesi) seperti
